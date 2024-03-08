@@ -20,14 +20,14 @@ def get_model(architecture_name, num_classes, window_size):
     else:
         raise NotImplementedError("ViT model part not implemented!")
 
-def load_model(exp_name, num_classes, window_size):
+def load_model(checkpoint_path, num_classes, window_size):
     '''
     load existing model to evaluate
-    exp_name: the experiment name of the model
+    checkpoint_path: the experiment name of the model
     '''
-    architecture_name = exp_name.split('_')[-4]
+    architecture_name = checkpoint_path.split('/')[1].split('_')[-1]
     model = get_model(architecture_name, num_classes, window_size)
-    model.load_state_dict(torch.load(os.path.join('checkpoint', exp_name)))
+    model.load_state_dict(torch.load(checkpoint_path)['state_dict'])
     return model
 
 # currently used

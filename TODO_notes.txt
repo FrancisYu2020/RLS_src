@@ -2,5 +2,5 @@
 2. improve the code by use metaphor [done]
 3. print the prediction line and ground truth line with red marks for leg movement. [done]
 4. slice more training data by using overlapped ones. [done]
-5. change the plot code format accordingly
+5. change the plot code format accordingly [done]
 6. separate left and right leg movements.

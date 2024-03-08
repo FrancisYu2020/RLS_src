@@ -1,4 +1,8 @@
 import matplotlib.pyplot as plt
+from tqdm import tqdm
+import torch
+from matplotlib.patches import Rectangle
+import os
 
 def plot_validation(args, model, val_loader, metric, height=0.3, linewidth=1, offset=-20000, yoffset=0.35, fontsize=15, figsize=(10, 6)):
     '''
@@ -16,7 +20,7 @@ def plot_validation(args, model, val_loader, metric, height=0.3, linewidth=1, of
         sub function to plot regression part
         '''
         if roi_labels[i][1] < 0:
-            rect2 = Rectangle((curr_start, y_position), window_size, height, edgecolor='black', facecolor='black', linewidth=linewidth)
+            rect2 = Rectangle((curr_start, y_position), args.window_size, height, edgecolor='black', facecolor='black', linewidth=linewidth)
             plt.gca().add_patch(rect2)
         else:
             if roi_labels[i][0] < 0:
@@ -26,8 +30,8 @@ def plot_validation(args, model, val_loader, metric, height=0.3, linewidth=1, of
                 plt.gca().add_patch(rect2)
             rect2 = Rectangle((roi_labels[i][0] + curr_start, y_position), roi_labels[i][-1] - roi_labels[i][0], height, edgecolor='red', facecolor='red', linewidth=linewidth)
             plt.gca().add_patch(rect2)
-            if roi_labels[i][-1] < window_size - 1:
-                rect2 = Rectangle((roi_labels[i][-1] + curr_start, y_position), window_size - 1 - roi_labels[i][-1], height, edgecolor='black', facecolor='black', linewidth=linewidth)
+            if roi_labels[i][-1] < args.window_size - 1:
+                rect2 = Rectangle((roi_labels[i][-1] + curr_start, y_position), args.window_size - 1 - roi_labels[i][-1], height, edgecolor='black', facecolor='black', linewidth=linewidth)
                 plt.gca().add_patch(rect2)
             
     curr_start = 0
@@ -36,7 +40,7 @@ def plot_validation(args, model, val_loader, metric, height=0.3, linewidth=1, of
         labels = labels.to(args.device)
         roi_labels = roi_labels.to(args.device).float()
         if args.normalize_roi:
-            roi_labels = (roi_labels * window_size).int()
+            roi_labels = (roi_labels * args.window_size).int()
 
         # Forward pass
         cls_loss, regression_loss = 0, 0
@@ -46,7 +50,7 @@ def plot_validation(args, model, val_loader, metric, height=0.3, linewidth=1, of
             cls_logits, regression_logits = model(images)
             mask = roi_labels[:, 0] != -1
             if args.normalize_roi:
-                regression_logits = (regression_logits * window_size).int().cpu()
+                regression_logits = (regression_logits * args.window_size).int().cpu()
             else:
                 regression_logits = regression_logits.int().cpu()
         
@@ -55,11 +59,11 @@ def plot_validation(args, model, val_loader, metric, height=0.3, linewidth=1, of
             roi_labels = roi_labels.cpu()
             
             # classification ground truth 
-            rect0 = Rectangle((curr_start, 0), window_size, height, edgecolor='red' if labels[i] else 'black', facecolor='red' if labels[i] else 'black', linewidth=linewidth)
+            rect0 = Rectangle((curr_start, 0), args.window_size, height, edgecolor='red' if labels[i] else 'black', facecolor='red' if labels[i] else 'black', linewidth=linewidth)
             plt.gca().add_patch(rect0)
             
             # classification prediction
-            rect1 = Rectangle((curr_start, 1), window_size, height, edgecolor='red' if predicted[i] else 'black', facecolor='red' if predicted[i] else 'black', linewidth=linewidth)
+            rect1 = Rectangle((curr_start, 1), args.window_size, height, edgecolor='red' if predicted[i] else 'black', facecolor='red' if predicted[i] else 'black', linewidth=linewidth)
             plt.gca().add_patch(rect1)
             
             # regression ground truth
@@ -68,7 +72,7 @@ def plot_validation(args, model, val_loader, metric, height=0.3, linewidth=1, of
             # regression prediction
             plot_regression(regression_logits, 3)
                     
-            curr_start += window_size
+            curr_start += args.window_size
         
     plt.text(curr_start + offset, 0 + yoffset, 'classification ground truth', fontsize=fontsize)
     plt.text(curr_start + offset, 1 + yoffset, 'classification prediction', fontsize=fontsize)
@@ -77,5 +81,5 @@ def plot_validation(args, model, val_loader, metric, height=0.3, linewidth=1, of
     plt.xlim(0, 55000)
     plt.ylim(0, 4)
     suffix = {'f1': '_f1_model.png', 'f0.5': '_f0.5_model.png', 'mIoU': '_mIoU_model.png'}
-    plt.title(args.exp_name + f'_{metric}_model')
-    plt.savefig(os.path.join('figures', args.exp_name + suffix[metric]))
+    plt.title(f'Patient{args.patient_id}_' + args.exp_name + f'_{metric}_model')
+    plt.savefig(os.path.join(args.figure_dir, f'Patient{args.patient_id}' + suffix[metric]))

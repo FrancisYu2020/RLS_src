@@ -1,28 +1,47 @@
 import numpy as np
+import os
 
-def sliding_window_view(arr, window_size, stride):
-    """
-    Create a view of `arr` with a sliding window of size `window_size` moved by `stride`.
-    
-    Parameters:
-    - arr: numpy array of 1 dimension.
-    - window_size: size of the sliding window.
-    - stride: step size between windows.
-    
-    Returns:
-    - A 2D numpy array where each row is a window.
-    """
-    n = arr.shape[0]
-    num_windows = (n - window_size) // stride + 1
-    indices = np.arange(window_size)[None, :] + stride * np.arange(num_windows)[:, None]
-    return arr[indices]
+class ArgParser:
+    def __init__(self, window_size='win155_'):
+        self.window_size = window_size
 
-# Example usage
-arr = np.arange(100)  # A sample numpy array
-window_size = 4  # Length of the window
-stride = 2  # Step size
+args = ArgParser()
 
-# Apply the sliding window view function
-result = sliding_window_view(arr, window_size, stride)
+def quick_print(note, data):
+    print(note + ':', data.max(), (data / 255).mean(axis=(0,2,3)), (data / 255).std(axis=(0, 2, 3)))
+    print((data / 255).mean(axis=(0,2,3)).mean(), (data / 255).mean(axis=(0,2,3)).std(), (data / 255).std())
+    print()
 
-print(result)
+data_paths = ['data/12-13-2023', 'data/02-17-2024']
+# data_paths = ['data/12-13-2023', 'data/02-15-2024', 'data/02-17-2024']
+for i in range(len(data_paths)):
+    train_data = np.load(os.path.join(data_paths[i], args.window_size + 'sensing_mat_data_train.npy')).astype(np.float32)
+    val_data = np.load(os.path.join(data_paths[i], args.window_size + 'sensing_mat_data_val.npy')).astype(np.float32)
+    whole_data = np.concatenate([np.load(os.path.join(data_paths[i], args.window_size + 'sensing_mat_data_train.npy')).astype(np.float32), np.load(os.path.join(data_paths[i], args.window_size + 'sensing_mat_data_val.npy')).astype(np.float32)], axis=0)
+    train_label = np.load(os.path.join(data_paths[i], args.window_size + 'EMG_label_train.npy'))
+    val_label = np.load(os.path.join(data_paths[i], args.window_size + 'EMG_label_val.npy')).astype(np.float32)
+    whole_label = np.concatenate([np.load(os.path.join(data_paths[i], args.window_size + 'EMG_label_train.npy')), np.load(os.path.join(data_paths[i], args.window_size + 'EMG_label_val.npy'))], axis=0)
+    positive_train_idx, negative_train_idx = train_label > 0, train_label == 0
+    positive_val_idx, negative_val_idx = val_label > 0, val_label == 0
+    positive_whole_idx, negative_whole_idx = whole_label > 0, whole_label == 0
+    positive_train_data, negative_train_data = train_data[positive_train_idx], train_data[negative_train_idx]
+    positive_val_data, negative_val_data = val_data[positive_val_idx], val_data[negative_val_idx]
+    positive_whole_data, negative_whole_data = whole_data[positive_whole_idx], whole_data[negative_whole_idx]
+
+    quick_print('train', train_data)
+    quick_print('val', val_data)
+    quick_print('whole', whole_data)
+    print()
+    print()
+    quick_print('positive train', positive_train_data)
+    quick_print('positive val', positive_val_data)
+    quick_print('positive whole', positive_whole_data)
+    print()
+    print()
+    quick_print('negative train', negative_train_data)
+    quick_print('negative val', negative_val_data)
+    quick_print('negative whole', negative_whole_data)
+    print('=================================================================================================')
+    print()
+    print()
+    print()
