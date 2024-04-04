@@ -1,15 +1,16 @@
 from torch.utils.data import DataLoader, Dataset
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
+import numpy as np
 
 def get_cnn_transforms(window_size, train=True):
     # cnn transformation
     if train:
         transform = transforms.Compose([
             transforms.ToTensor(),
-            # transforms.RandomRotation(degrees=(-180, 180)),
+            transforms.RandomRotation(degrees=(-20, 20)),
             # transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
-            transforms.Normalize([0.47] * window_size, [0.2] * window_size),
+#             transforms.Normalize([0.47] * window_size, [0.2] * window_size),
         ])
     else:
         transform = transforms.Compose([
