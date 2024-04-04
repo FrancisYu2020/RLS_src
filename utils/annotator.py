@@ -12,7 +12,7 @@ class Annotator:
     def __init__(self, global_start_timestamp, start_idx, screenshot_width=None, \
                  top_margin=370, left_margin=107, right_margin=10, bottom=413, \
                  interval_length=60, gap_threshold=10, screen_change_threshold=0.01, \
-                 csv_file_path='red_pixels_coordinates.csv', roi=(689, 81, 734, 99), \
+                 csv_file_path=None, roi=(689, 81, 734, 99), \
                  snapshots_path=None, show_debug=False) -> None:
         '''
         global_start_timestamp: the timestamp where the recordings started to play
@@ -38,7 +38,11 @@ class Annotator:
         self.interval_length = interval_length
         self.gap_threshold = gap_threshold
         self.screen_change_threshold = screen_change_threshold
-        self.csv_file_path = csv_file_path
+        if not csv_file_path:
+            csv_file_path = snapshots_path.split("/")[-1]
+        elif not csv_file_path.endswith(".csv"):
+            csv_file_path += ".csv"
+        self.csv_file_path = os.path.join(snapshots_path, csv_file_path)
         self.roi = roi
         self.snapshots_path = snapshots_path
         self.start_idx = start_idx
@@ -170,6 +174,12 @@ class Annotator:
         # visualization
         for start, end in intervals:
             cv2.line(screenshot, (start, 5 + self.top_margin), (end, 5 + self.top_margin), (255, 0, 0), 2)
+        
+        # Display the modified screenshot
+        if self.snapshots_path:
+            if not os.path.exists(self.snapshots_path):
+                os.mkdir(self.snapshots_path)
+            cv2.imwrite(os.path.join(self.snapshots_path, f'{screenshot_idx}.png'), screenshot)
 
         # Save to CSV
         df = pd.DataFrame(self.intervals_to_timestamps(intervals, screenshot_idx), columns=['start_h', 'start_min', 'start_s', 'end_h', 'end_min', 'end_s'])
@@ -179,12 +189,6 @@ class Annotator:
             self.debug_draw(screenshot, self.left_margin, self.top_margin, self.screenshot_width - self.right_margin, self.bottom)
             # l, u, r, d = self.roi
             # self.debug_draw(screenshot, l, u, r, d)
-
-        # Display the modified screenshot
-        if self.snapshots_path:
-            if not os.path.exists(self.snapshots_path):
-                os.mkdir(self.snapshots_path)
-            cv2.imwrite(os.path.join(self.snapshots_path, f'{screenshot_idx}.png'), screenshot)
     
     def debug_draw(self, img, l, u, r, d, color=(255, 0, 0), thickness=2):
         cv2.line(img, (l, u), (l, d), color, thickness)

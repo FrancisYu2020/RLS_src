@@ -14,7 +14,7 @@ parser = argparse.ArgumentParser(description="EMG data labeling script")
 parser.add_argument('start_frame', type=int, help="The index of the start frame")
 parser.add_argument('start_timestamp', type=str, help="The start timestamp, format hh:mm:ss")
 parser.add_argument('snapshots_path', type=str, help="Path to which the snapshots during the labeling are stored")
-parser.add_argument('--csv', type=str, help="csv file path to store the labeled data, if .csv is not add, it will be automatically processed", default="EMG_label.csv")
+parser.add_argument('--csv', type=str, help="csv file path to store the labeled data, if .csv is not add, it will be automatically processed", default="positive_timestamps")
 parser.add_argument('--show_debug', type=int, help="show the debug bounding boxes in snapshots if not 0", default=0)
 
 args = parser.parse_args()
