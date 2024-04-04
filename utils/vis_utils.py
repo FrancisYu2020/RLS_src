@@ -16,9 +16,9 @@ def plot_validation(args, y_score, y_true, threshold, metric, height=0.3, linewi
     '''
     assert metric in ['loss', 'pr_auc', 'accuracy']
     plt.figure(figsize=figsize)
-    y_score = torch.sigmoid(y_score).detach().cpu().numpy()
+    y_score = torch.softmax(y_score, dim=-1).detach().cpu().numpy()
     y_true = y_true.cpu().numpy()
-    y_pred = (y_score >= threshold) * 1
+    y_pred = y_score.argmax(axis=-1)
     f_quarter = fbeta_score(y_true, y_pred, beta=0.25)
     f_half = fbeta_score(y_true, y_pred, beta=0.5)
     f_1 = fbeta_score(y_true, y_pred, beta=1)

@@ -21,7 +21,7 @@ parser.add_argument("--lr", default=0.01, help="learning rate used to train the 
 parser.add_argument("--weight_decay", default=0.1, help="weight decay used to train the model", type=float)
 parser.add_argument("--epochs", default=300, help="epochs used to train the model", type=int)
 parser.add_argument("--batch_size", default=256, help="batch size used to train the model", type=int)
-parser.add_argument("--num_classes", default=1, help="number of classes for the classifier", type=int)
+parser.add_argument("--num_classes", default=2, help="number of classes for the classifier", type=int)
 parser.add_argument("--window_size", default=16, help="window size of the input data", type=int)
 parser.add_argument("--cross_val_type", default=0, type=int, help="0 for train all val all, 1 for leave patient 1 out")
 parser.add_argument("--task", default="classification", type=str, help="indicate what kind of task to be run (regression/classification, etc.)")
@@ -63,8 +63,8 @@ learning_rate = args.lr
 # load data
 data_prefix = 'win' + str(args.window_size) + '_'
 
-data_paths = ['data/patient03-12-12-2023', 'data/patient05-02-15-2024', 'data/patient06-02-17-2024']
-patient_ids = {0:3, 1:5, 2:6}
+data_paths = ['data/patient03-12-12-2023', 'data/patient05-02-15-2024', 'data/patient06-02-17-2024', 'data/patient09-03-01-2024', 'data/patient11-03-15-2024']
+patient_ids = {0:3, 1:5, 2:6, 3:9, 4:11}
 for i in range(len(data_paths)):
     args.patient_id = patient_ids[i]
     leave_out_idx = i
@@ -72,9 +72,7 @@ for i in range(len(data_paths)):
     val_label = np.load(os.path.join(data_paths[leave_out_idx], data_prefix + 'EMG_label_val.npy'))
     val_roi_label = np.load(os.path.join(data_paths[leave_out_idx], data_prefix + 'EMG_roi_label_val.npy'))
     if args.normalize_data:
-        val_data /= 225
-        val_data -= 0.002
-        val_data /= 0.012
+        val_data /= 800
 
     positive_idx = val_label > 0
     val_label[positive_idx] = 1
@@ -94,15 +92,16 @@ for i in range(len(data_paths)):
     model.to(device)
     model.eval()
     y_score, y_true = [], []
-    for images, labels, _ in tqdm(val_loader):
-        images = images.to(args.device)
-        labels = labels.to(args.device)
-        y_score.append(model(images).squeeze())
-        y_true.append(labels)
-    y_score = torch.hstack(y_score)
-    y_true = torch.hstack(y_true)
+    with torch.no_grad():
+        for images, labels, _ in tqdm(val_loader):
+            images = images.to(args.device)
+            labels = labels.to(args.device)
+            y_score.append(model(images).squeeze())
+            y_true.append(labels)
+    y_score = torch.cat(y_score, dim=0)
+    y_true = torch.cat(y_true, dim=0)
     
-    num_figures = 10
+    num_figures = 1
     for j in tqdm(range(num_figures)):
         threshold = j / num_figures
         plot_validation(args, y_score, y_true, threshold, 'accuracy')
@@ -111,13 +110,14 @@ for i in range(len(data_paths)):
     model.to(device)
     model.eval()
     y_score, y_true = [], []
-    for images, labels, _ in tqdm(val_loader):
-        images = images.to(args.device)
-        labels = labels.to(args.device)
-        y_score.append(model(images).squeeze())
-        y_true.append(labels)
-    y_score = torch.hstack(y_score)
-    y_true = torch.hstack(y_true)
+    with torch.no_grad():
+        for images, labels, _ in tqdm(val_loader):
+            images = images.to(args.device)
+            labels = labels.to(args.device)
+            y_score.append(model(images).squeeze())
+            y_true.append(labels)
+    y_score = torch.cat(y_score, dim=0)
+    y_true = torch.cat(y_true, dim=0)
     
     for j in tqdm(range(num_figures)):
         threshold = j / num_figures

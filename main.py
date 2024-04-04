@@ -89,8 +89,8 @@ args.window_size = 'win' + str(args.window_size) + '_'
 if args.long_tailed:
     args.window_size += 'LT_'
 
-data_paths = ['data/patient06-02-17-2024']
-# data_paths = ['data/patient03-12-12-2023', 'data/patient05-02-15-2024', 'data/patient06-02-17-2024', 'data/patient09-03-01-2024', 'data/patient11-03-15-2024']
+# data_paths = ['data/patient06-02-17-2024']
+data_paths = ['data/patient03-12-12-2023', 'data/patient05-02-15-2024', 'data/patient06-02-17-2024', 'data/patient09-03-01-2024', 'data/patient11-03-15-2024']
 # data_paths = ['data/12-13-2023']
 # data_paths = ['data/12-13-2023', 'data/02-17-2024']
 # data_paths = ['data/12-13-2023', 'data/02-15-2024', 'data/02-17-2024']
@@ -121,12 +121,12 @@ else:
     raise NotImplementedError("soft label not implemented yet!")
 
 if args.normalize_data:
-    train_data /= train_data.max()
-    train_data -= train_data.mean()
-    train_data /= train_data.std()
-    val_data /= train_data.max()
-    val_data -= train_data.mean()
-    val_data /= train_data.std()
+    train_data /= 800
+#     train_data -= train_data.mean()
+#     train_data /= train_data.std()
+    val_data /= 800
+#     val_data -= train_data.mean()
+#     val_data /= train_data.std()
     print(train_data.max(), train_data.mean(), train_data.std())
     
 print(train_data.shape, train_label.shape, train_label.sum(), val_data.shape, val_label.shape, val_label.sum())
