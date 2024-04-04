@@ -7,7 +7,7 @@ import os
 import matplotlib.pyplot as plt
 import time
 import threading
-from utils import *
+from utils.annotator import *
 import argparse
 
 parser = argparse.ArgumentParser(description="EMG data labeling script")

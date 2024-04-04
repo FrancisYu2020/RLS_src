@@ -1,3 +1,8 @@
+data
+Mat
+mix_train
+*.ipynb
+*.sh
 __pycache__
 test.py
 *.png
@@ -6,3 +11,7 @@ test.py
 *.jpg
 debug
 snapshots
+.ipynb*
+**/.ipynb*
+wandb
+checkpoint
