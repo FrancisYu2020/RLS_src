@@ -31,9 +31,9 @@ def train(args, model, train_loader, cls_criterion, regression_criterion, optimi
     running_iou, total_iou_samples = 0, 0
     matrix = np.zeros((2, 2))
     model.train()
-    for i, (images, labels, roi_labels) in enumerate(train_loader):
+    for i, (images, labels, roi_labels) in tqdm(enumerate(train_loader)):
         images = images.to(args.device)
-        labels = labels.to(args.device).float()
+        labels = labels.to(args.device).long()
 #         roi_labels = roi_labels.to(args.device).float()
     
         # Forward pass
@@ -71,9 +71,6 @@ def train(args, model, train_loader, cls_criterion, regression_criterion, optimi
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-        if scheduler:
-            scheduler.step()
-            print(f"lr decayed!")
         
     # Return calculated metrics
 #     return get_metric_scores(matrix, running_cls_loss, running_regression_loss, running_iou, total_iou_samples)
@@ -94,9 +91,9 @@ def val(args, model, val_loader, cls_criterion, regression_criterion):
     running_cls_loss, running_regression_loss = 0, 0
 #     running_iou, total_iou_samples = 0, 0
     y_score, y_true = [], []
-    for i, (images, labels, roi_labels) in enumerate(val_loader):
+    for i, (images, labels, roi_labels) in tqdm(enumerate(val_loader)):
         images = images.to(args.device)
-        labels = labels.to(args.device).float()
+        labels = labels.to(args.device).long()
 #         roi_labels = roi_labels.to(args.device).float()
 
         # Forward pass
@@ -129,8 +126,8 @@ def val(args, model, val_loader, cls_criterion, regression_criterion):
     contrastive_loss /= len(y_score)
     rank_loss /= len(y_score)
     f_loss /= len(y_score)
-    y_score = torch.hstack(y_score).cpu().detach().numpy()
-    y_true = torch.hstack(y_true).cpu().detach().numpy()
+    y_score = F.softmax(torch.cat(y_score, dim=0), dim=-1).cpu().detach().numpy().max(axis=-1)
+    y_true = torch.cat(y_true, dim=0).cpu().detach().numpy()
 #     f_prec = fbeta(y_true, y_pred, beta=0.5)
 #     f1 = fbeta(y_true, y_pred, beta=1)
     precision, recall, _ = precision_recall_curve(y_true, y_score)

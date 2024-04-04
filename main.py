@@ -22,7 +22,7 @@ parser.add_argument("--lr", default=0.01, help="learning rate used to train the 
 parser.add_argument("--weight_decay", default=0.1, help="weight decay used to train the model", type=float)
 parser.add_argument("--epochs", default=300, help="epochs used to train the model", type=int)
 parser.add_argument("--batch_size", default=256, help="batch size used to train the model", type=int)
-parser.add_argument("--num_classes", default=1, help="number of classes for the classifier", type=int)
+parser.add_argument("--num_classes", default=2, help="number of classes for the classifier", type=int)
 parser.add_argument("--window_size", default=16, help="window size of the input data", type=int)
 parser.add_argument("--label_type", default="hard", help="indicate whether use hard one-hot labels or soft numerical labels", choices=["hard", "soft"])
 parser.add_argument("--long_tailed", default=0, help="indicate whether use balanced sampled data or the whole long-tailed data, 0 for balanced, 1 for long-tailed", type=int)
@@ -89,7 +89,8 @@ args.window_size = 'win' + str(args.window_size) + '_'
 if args.long_tailed:
     args.window_size += 'LT_'
 
-data_paths = ['data/patient03-12-12-2023', 'data/patient05-02-15-2024', 'data/patient06-02-17-2024', 'data/patient09-03-01-2024']
+data_paths = ['data/patient06-02-17-2024']
+# data_paths = ['data/patient03-12-12-2023', 'data/patient05-02-15-2024', 'data/patient06-02-17-2024', 'data/patient09-03-01-2024', 'data/patient11-03-15-2024']
 # data_paths = ['data/12-13-2023']
 # data_paths = ['data/12-13-2023', 'data/02-17-2024']
 # data_paths = ['data/12-13-2023', 'data/02-15-2024', 'data/02-17-2024']
@@ -128,7 +129,7 @@ if args.normalize_data:
     val_data /= train_data.std()
     print(train_data.max(), train_data.mean(), train_data.std())
     
-print(train_data.shape, train_data.dtype, train_label.shape, val_data.shape, val_label.shape, val_label.sum())
+print(train_data.shape, train_label.shape, train_label.sum(), val_data.shape, val_label.shape, val_label.sum())
 
 # original CNN transformation
 train_transform = get_cnn_transforms(train_data.shape[1])
@@ -154,7 +155,7 @@ weights /= weights.sum()
 
 # cls_criterion = nn.BCEWithLogitsLoss()
 # cls_criterion = nn.CrossEntropyLoss() if args.num_classes > 1 else nn.BCEWithLogitsLoss()
-cls_criterion = combined_loss(1)
+cls_criterion = combined_loss(weights)
 # cls_criterion = combined_loss(1, pos_weight=torch.tensor(weights[1]).float().to(device))
 # optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=args.weight_decay)
 optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=args.weight_decay)

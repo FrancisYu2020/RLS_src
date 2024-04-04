@@ -9,14 +9,15 @@ def regression_criterion(predict, roi_labels, labels):
     return F.mse_loss(predict[mask], roi_labels[mask]) + (F.relu(predict[mask][:, 0] - predict[mask][:, 1].detach())).mean() + (F.relu(-predict[mask])).mean()
 
 class combined_loss(nn.Module):
-    def __init__(self, beta, epsilon=1e-7, margin=1.0, pos_weight=None):
+    def __init__(self, beta, epsilon=1e-7, margin=1.0, weights=None):
         super().__init__()
         self.beta = beta
         self.epsilon = epsilon
         self.margin = margin
-        self.bce_loss = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+        self.bce_loss = nn.CrossEntropyLoss(weight=weights)
      
     def surrogate_precision_recall_loss(self, y_logits, y_true):
+        return 0
         y_pred = torch.sigmoid(y_logits)
         TP = (y_pred * y_true).sum()
         FP = ((1 - y_pred) * y_true).sum()
@@ -34,6 +35,7 @@ class combined_loss(nn.Module):
         - y_score: Predicted scores or probabilities for being positive.
         - margin: Margin for the loss.
         """
+        return 0
         # Find the indices of positive and negative examples
         positive_indices = (y_true == 1)
         negative_indices = (y_true == 0)
@@ -58,6 +60,7 @@ class combined_loss(nn.Module):
         - y_score: Predicted scores.
         - margin: Margin for the loss.
         """
+        return 0
         positive_scores = y_score[y_true == 1]
         negative_scores = y_score[y_true == 0]
     

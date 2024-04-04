@@ -107,22 +107,21 @@ for i in range(len(data_paths)):
         threshold = j / num_figures
         plot_validation(args, y_score, y_true, threshold, 'accuracy')
         
-#     model = load_model(os.path.join(args.checkpoint_dir, 'best_loss.ckpt'), num_classes, args.window_size)
-#     model.to(device)
-#     model.eval()
-#     y_score, y_true = [], []
-#     for images, labels, _ in tqdm(val_loader):
-#         images = images.to(args.device)
-#         labels = labels.to(args.device)
-#         y_score.append(model(images).squeeze())
-#         y_true.append(labels)
-#     y_score = torch.hstack(y_score)
-#     y_true = torch.hstack(y_true)
+    model = load_model(os.path.join(args.checkpoint_dir, 'best_loss.ckpt'), num_classes, args.window_size)
+    model.to(device)
+    model.eval()
+    y_score, y_true = [], []
+    for images, labels, _ in tqdm(val_loader):
+        images = images.to(args.device)
+        labels = labels.to(args.device)
+        y_score.append(model(images).squeeze())
+        y_true.append(labels)
+    y_score = torch.hstack(y_score)
+    y_true = torch.hstack(y_true)
     
-#     num_figures = 20
-#     for j in tqdm(range(num_figures)):
-#         threshold = j / num_figures
-#         plot_validation(args, y_score, y_true, threshold, 'loss')
+    for j in tqdm(range(num_figures)):
+        threshold = j / num_figures
+        plot_validation(args, y_score, y_true, threshold, 'loss')
     
 #     model = load_model(os.path.join(args.checkpoint_dir, 'best_f1.ckpt'), num_classes, args.window_size)
 #     model.to(device)

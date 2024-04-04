@@ -41,7 +41,7 @@ def load_model(checkpoint_path, num_classes, window_size):
 class Linear(nn.Module):
     def __init__(self, window_size):
         super().__init__()
-        self.linear = nn.Linear(window_size * 256, 1)
+        self.linear = nn.Linear(window_size * 256, 2)
     
     def forward(self, x):
         return self.linear(x.flatten(start_dim=1))
@@ -92,7 +92,7 @@ class PositionalMLP(nn.Module):
         )
         self.mlp2 = nn.Sequential(
             MLP(256, 64, hidden_features=256),
-            MLP(64, 1)
+            MLP(64, 2)
         )
     
     def forward(self, x):
@@ -209,12 +209,15 @@ class RLS2DModel(nn.Module):
 class RLS3DModel(RLS2DModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.conv = nn.Sequential(
-            nn.Conv3d(1, 3, 7, 1, 3),
-#             nn.BatchNorm3d(3),
-#             nn.ReLU()
-        )
+#         self.conv = nn.Sequential(
+#             nn.Conv3d(1, 3, 7, 1, 3),
+# #             nn.BatchNorm3d(3),
+# #             nn.ReLU()
+#         )
         self.resnet = generate_model(self.layers)
+        self.resnet.conv1 = nn.Sequential(
+            nn.Conv3d(1, 64, 7, 1, 3)
+        )
         self._init_modules()
     
 class RLSViTModel(nn.Module):
