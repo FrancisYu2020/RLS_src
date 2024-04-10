@@ -172,12 +172,13 @@ class RLS2DModel(nn.Module):
         self.layers = layers
 #         self.conv = nn.Conv2d(window_size, 3, 3, 3, 1)
 #         torch.nn.init.kaiming_normal_(self.conv.weight, a=0, mode='fan_out')
-        self.resnet = resnet_2d_models[layers](pretrained=False)
+        self.resnet = resnet_2d_models[layers]()
         self.resnet.conv1 = nn.Conv2d(window_size, 64, 7, 2, 3, bias=False)
         self.classification_head = MLP(self.resnet.fc.in_features, num_classes)
         self.regression_head = MLP(self.resnet.fc.in_features, num_classes)
         self.temperature = nn.Parameter(torch.ones(1) * initial_temperature)
         self._init_modules()
+        self.resnet.conv1.to(torch.device('cuda'))
     
     def _init_modules(self):
         # initialize conv blocks
@@ -189,7 +190,6 @@ class RLS2DModel(nn.Module):
                 nn.init.constant_(m.bias, 0)
                     
     def forward(self, x):
-#         x = self.conv(x)
         x = self.resnet.conv1(x)
         x = self.resnet.bn1(x)
         x = self.resnet.relu(x)

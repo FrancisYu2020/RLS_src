@@ -161,10 +161,11 @@ cls_criterion = combined_loss(weights)
 optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=args.weight_decay)
 # scheduler = CosineAnnealingLR(optimizer, T_max=num_epochs, eta_min=0)
 # scheduler = StepLR(optimizer, step_size=1, gamma=0.9)
-scheduler = LambdaLR(optimizer, lambda epoch: max(0.01, 0.1 ** epoch))
+scheduler = LambdaLR(optimizer, lambda epoch: max(0.001, 0.9 ** epoch))
 args.best_f1, args.best_fprec, args.best_miou, args.best_pr_auc, args.best_loss, args.best_accuracy = -np.inf, -np.inf, -np.inf, -np.inf, np.inf, -np.inf
 args.best_f1_epoch, args.best_fprec_epoch, args.best_miou_epoch, args.best_pr_auc_epoch, args.best_loss_epoch, args.best_accuracy_epoch = None, None, None, None, None, None
 
+print('start training loop')
 # main train val loop
 for epoch in range(num_epochs):
     args.epoch = epoch

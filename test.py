@@ -46,32 +46,42 @@
 #     print()
 #     print()
 
+# import torch
+# import torch.nn as nn
+# import math
+
+# class PositionalEncoding(nn.Module):
+#     # modified from https://pytorch.org/tutorials/beginner/transformer_tutorial.html
+#     def __init__(self, max_len: int, d_model: int, dropout: float = 0.1):
+#         super().__init__()
+#         self.dropout = nn.Dropout(p=dropout)
+
+#         position = torch.arange(max_len).unsqueeze(1)
+#         div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
+#         pe = torch.zeros(max_len, d_model)
+#         pe[:, 0::2] = torch.sin(position * div_term)
+#         pe[:, 1::2] = torch.cos(position * div_term)
+#         self.register_buffer('pe', pe.unsqueeze(0))
+#         print(self.pe)
+
+#     def forward(self, x: torch.Tensor) -> torch.Tensor:
+#         """
+#         Arguments:
+#             x: Tensor, shape ``[batch_size, flattened_mat_len, window_size]``
+#         """
+#         x = x + self.pe
+#         return self.dropout(x)
+    
+# pe = PositionalEncoding(256, 156)
+# x = torch.randn(16, 256, 156)
+# print(pe(x).size())
+
 import torch
 import torch.nn as nn
-import math
+from torchvision import models
 
-class PositionalEncoding(nn.Module):
-    # modified from https://pytorch.org/tutorials/beginner/transformer_tutorial.html
-    def __init__(self, max_len: int, d_model: int, dropout: float = 0.1):
-        super().__init__()
-        self.dropout = nn.Dropout(p=dropout)
-
-        position = torch.arange(max_len).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
-        pe = torch.zeros(max_len, d_model)
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
-        self.register_buffer('pe', pe.unsqueeze(0))
-        print(self.pe)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Arguments:
-            x: Tensor, shape ``[batch_size, flattened_mat_len, window_size]``
-        """
-        x = x + self.pe
-        return self.dropout(x)
-    
-pe = PositionalEncoding(256, 156)
-x = torch.randn(16, 256, 156)
-print(pe(x).size())
+# model = models.resnet18().cuda()
+model = nn.Conv2d(3, 16, 3, 3, 1).cuda()
+# model = nn.Linear(224, 10).cuda()
+x = torch.randn(16, 3, 224, 224).cuda()
+print(model(x).size())

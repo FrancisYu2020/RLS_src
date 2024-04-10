@@ -99,7 +99,8 @@ def val(args, model, val_loader, cls_criterion, regression_criterion):
         # Forward pass
         cls_loss, regression_loss = 0, 0
         if args.task == 'classification':
-            cls_logits = model(images).squeeze()
+            with torch.no_grad():
+                cls_logits = model(images).squeeze()
             bce_loss, f_loss, contrastive_loss, rank_loss = cls_criterion(cls_logits, labels)
 #             loss += cls_criterion(cls_logits, labels)
         else:
@@ -177,6 +178,6 @@ def val(args, model, val_loader, cls_criterion, regression_criterion):
 #         print('Best miou model saved!')
     print(f'Epoch [{args.epoch+1}/{args.epochs}], CLS Loss: {bce_loss}, Accuracy: {accuracy:.2f}% PR AUC: {pr_auc:.4f}')
 #     print(f'Epoch [{args.epoch+1}/{args.epochs}], CLS Loss: {bce_loss}, f loss: {f_loss}, contrastive loss: {contrastive_loss}, rank loss: {rank_loss}, PR AUC: {pr_auc:.4f}')
-    return cls_loss, regression_loss, pr_auc, accuracy
+    return bce_loss, regression_loss, pr_auc, accuracy
 #     return precision, recall, f1, fprec, cls_loss, regression_loss, miou
         

@@ -14,7 +14,7 @@ class combined_loss(nn.Module):
         self.beta = beta
         self.epsilon = epsilon
         self.margin = margin
-        self.bce_loss = nn.CrossEntropyLoss(weight=weights)
+        self.bce_loss = nn.CrossEntropyLoss()
      
     def surrogate_precision_recall_loss(self, y_logits, y_true):
         return 0
