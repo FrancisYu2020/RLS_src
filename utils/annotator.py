@@ -11,7 +11,7 @@ import time
 class Annotator:
     def __init__(self, global_start_timestamp, start_idx, screenshot_width=None, \
                  top_margin=370, left_margin=107, right_margin=10, bottom=413, \
-                 interval_length=60, gap_threshold=10, screen_change_threshold=0.01, \
+                 interval_length=30, gap_threshold=10, screen_change_threshold=0.01, \
                  csv_file_path=None, roi=(689, 81, 734, 99), \
                  snapshots_path=None, show_debug=False) -> None:
         '''
