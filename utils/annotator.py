@@ -10,10 +10,10 @@ import time
 
 class Annotator:
     def __init__(self, global_start_timestamp, start_idx, screenshot_width=None, \
-                 top_margin=370, left_margin=107, right_margin=10, bottom=413, \
+                 top_margin=570, left_margin=107, right_margin=10, bottom=613, \
                  interval_length=30, gap_threshold=10, screen_change_threshold=0.01, \
-                 csv_file_path=None, roi=(689, 81, 734, 99), \
-                 snapshots_path=None, show_debug=False) -> None:
+                 csv_file_path=None, roi=(689, 81, 734, 99), sleep_stage_roi=(93, 107, 109, 123), \
+                 snapshots_path=None, mask_csv=None, show_debug=False) -> None:
         '''
         global_start_timestamp: the timestamp where the recordings started to play
         screenshot_width: the width of the screenshot, will be initialized if set to None
@@ -42,11 +42,21 @@ class Annotator:
             csv_file_path = snapshots_path.split("/")[-1]
         elif not csv_file_path.endswith(".csv"):
             csv_file_path += ".csv"
+        self.mask_csv = mask_csv
+        if self.mask_csv:
+            if not self.mask_csv.endswith(".csv"):
+                mask_csv += ".csv"
+            self.mask_csv = os.path.join(snapshots_path, mask_csv)
         self.csv_file_path = os.path.join(snapshots_path, csv_file_path)
         self.roi = roi
+        self.sleep_stage_roi = sleep_stage_roi
         self.snapshots_path = snapshots_path
         self.start_idx = start_idx
         self.show_debug = show_debug
+        self.icon_path = 'sleep_stage_icons'
+        self.sleep_icons = [cv2.imread(image_name, cv2.COLOR_RGB2BGR) for image_name in [f'{self.icon_path}/light.png', f'{self.icon_path}/w.png', \
+                                                                                         f'{self.icon_path}/n1.png', f'{self.icon_path}/n2.png', \
+                                                                                         f'{self.icon_path}/n3.png', f'{self.icon_path}/r.png']]
 
         # initialize the screenshot width by taking a screenshot and check if screenshot width is not specified
         if self.screenshot_width is None:
@@ -151,6 +161,14 @@ class Annotator:
         # Convert difference to a percentage change
         percent_changed = np.sum(diff) / np.prod(diff.shape)
         return percent_changed > self.screen_change_threshold
+    
+    def imdiff(self, img1, img2):
+        return np.abs(img1.astype(float) - img2.astype(float)).sum()
+    
+    def is_awake(self, screenshot):
+        l, u, r, d = self.sleep_stage_roi
+        curr_sleep_stage_icon = screenshot[u:d+1, l:r+1, :]
+        return np.argmin(np.array([self.imdiff(curr_sleep_stage_icon, img) for img in self.sleep_icons])) < 2
 
     def process_screenshot(self, screenshot, screenshot_idx):
         '''
@@ -185,10 +203,19 @@ class Annotator:
         df = pd.DataFrame(self.intervals_to_timestamps(intervals, screenshot_idx), columns=['start_h', 'start_min', 'start_s', 'end_h', 'end_min', 'end_s'])
         df.to_csv(self.csv_file_path, mode='a', index=False, header=not os.path.exists(self.csv_file_path))
 
+        # record the sleep stage timestamps where patients are identified as awake
+        if self.is_awake(screenshot):
+            curr_start_timestamp = self.get_screenshot_start_timestamp(screenshot_idx)
+            curr_end_timestamp = self.get_current_timestamp(curr_start_timestamp, self.screenshot_width - self.right_margin)
+            df = pd.DataFrame([np.array(curr_start_timestamp + curr_end_timestamp)], columns=['start_h', 'start_min', 'start_s', 'end_h', 'end_min', 'end_s'])
+            df.to_csv(self.mask_csv, mode='a', index=False, header=not os.path.exists(self.csv_file_path))
+
         if self.show_debug:
             self.debug_draw(screenshot, self.left_margin, self.top_margin, self.screenshot_width - self.right_margin, self.bottom)
-            # l, u, r, d = self.roi
-            # self.debug_draw(screenshot, l, u, r, d)
+            l, u, r, d = self.sleep_stage_roi
+            self.debug_draw(screenshot, l, u, r, d)
+            cv2.imwrite(os.path.join(self.snapshots_path, f'{screenshot_idx}.png'), screenshot)
+
     
     def debug_draw(self, img, l, u, r, d, color=(255, 0, 0), thickness=2):
         cv2.line(img, (l, u), (l, d), color, thickness)
