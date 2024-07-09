@@ -14,7 +14,7 @@ class combined_loss(nn.Module):
         self.beta = beta
         self.epsilon = epsilon
         self.margin = margin
-        self.bce_loss = nn.CrossEntropyLoss()
+        self.bce_loss = nn.BCEWithLogitsLoss()
      
     def surrogate_precision_recall_loss(self, y_logits, y_true):
         return 0
@@ -74,3 +74,28 @@ class combined_loss(nn.Module):
     
     def forward(self, y_score, y_true):
         return 1 * self.bce_loss(y_score, y_true), 0 * self.surrogate_precision_recall_loss(y_score, y_true), 0 * self.contrastive_loss(y_score, y_true), 0 * self.pairwise_ranking_loss(y_score, y_true)
+
+class DiceLoss(nn.Module):
+    def __init__(self, smooth=1e-8):
+        super(DiceLoss, self).__init__()
+        self.smooth = smooth
+
+    def forward(self, logits, targets):
+        # Apply sigmoid to get probabilities
+        probs = torch.sigmoid(logits)
+        
+        # Flatten the tensors
+        probs = probs.view(-1)
+        targets = targets.view(-1)
+        
+        # Compute intersection and union
+        intersection = (probs * targets).sum()
+        union = probs.sum() + targets.sum()
+        
+        # Compute Dice coefficient
+        dice_coeff = (2. * intersection + self.smooth) / (union + self.smooth)
+        
+        # Compute Dice loss
+        dice_loss = 1. - dice_coeff
+        
+        return dice_loss

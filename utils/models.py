@@ -3,51 +3,142 @@ import torch
 import torchvision.models as models
 import os
 from utils.resnet3d import *
+import timm
 
 # 10: is just a placeholder for class inheritence
 resnet_2d_models = {10: models.resnet18, 18: models.resnet18, 34: models.resnet34}
 
-def get_model(architecture_name, num_classes, window_size):
+def get_model(args):
     '''
     create new model to train
     '''
+    architecture_name = args.architecture
+    clip_len = args.clip_len
+    print(architecture_name)
+    if args.data_type == 'context':
+        num_classes = 1
+    else:
+        num_classes = clip_len
     if 'resnet' in architecture_name:
         dimension, architecture = architecture_name.split('-')
         if dimension[0] == '2':
-            return RLS2DModel(num_classes, int(architecture[-2:]), window_size=window_size)
+            return RLS2DModel(num_classes, int(architecture[-2:]), clip_len=clip_len, num_classes=num_classes)
         else:
-            return RLS3DModel(num_classes, int(architecture[-2:]), window_size=window_size)
+            return RLS3DModel(num_classes, int(architecture[-2:]), clip_len=clip_len, num_classes=num_classes)
     elif architecture_name == "2d-conv":
-        return RLSConv2D(num_classes, window_size=window_size)
+        return RLSConv2D(args, clip_len=clip_len, num_classes=num_classes)
     elif architecture_name == '3d-conv':
-        return RLSConv3D(num_classes, window_size=window_size)
+        return RLSConv3D(args, clip_len=clip_len, num_classes=num_classes)
     elif architecture_name == '2d-linear':
-        return Linear(window_size)
+        return Linear(clip_len, args.input_size)
     elif architecture_name == '2d-positional':
-        return PositionalMLP(window_size)
+        return PositionalMLP(clip_len, args.input_size)
+    elif architecture_name == '2d-efficientnet':
+        return EfficientNet(args, "efficientnet_b0.ra_in1k", num_classes)
     else:
         raise NotImplementedError("ViT model part not implemented!")
 
-def load_model(checkpoint_path, num_classes, window_size):
+def load_model(args, ckpt_name):
     '''
     load existing model to evaluate
     checkpoint_path: the experiment name of the model
     '''
+    checkpoint_path = os.path.join(args.checkpoint_dir, ckpt_name)
     architecture_name = checkpoint_path.split('/')[1].split('_')[-1]
-    model = get_model(architecture_name, num_classes, window_size)
+    model = get_model(args, args.clip_len)
     model.load_state_dict(torch.load(checkpoint_path)['state_dict'])
     return model
 
-class Linear(nn.Module):
-    def __init__(self, window_size):
+class Squeeze(nn.Module):
+    def __init__(self):
+        super(Squeeze, self).__init__()
+        pass
+
+    def forward(self, x):
+        return x.squeeze()
+    
+class EfficientNet(nn.Module):
+    def __init__(self, args, backbone, num_classes, dropout=0.1, pretrained=False, seq_len=32):
         super().__init__()
-        self.linear = nn.Linear(window_size * 256, 2)
+        assert args.batch_size >= seq_len, "batch size must be > n_heads"
+        assert args.batch_size % seq_len == 0, "batch size must be multiple of n_heads"
+        self.encoder = nn.Sequential(
+            nn.Conv2d(3, 3, 1, 1),
+            nn.BatchNorm2d(3),
+            nn.ReLU(),
+            nn.MaxPool2d(2),
+            nn.Conv2d(3, 16, 3, 1, 1),
+            nn.BatchNorm2d(16),
+            nn.ReLU(),
+            nn.MaxPool2d(2),
+            nn.Conv2d(16, 32, 3, 2, 1),
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+        )
+        self.input_size = args.input_size
+        self.batch_size = args.batch_size // seq_len
+        self.seq_len = seq_len
+        hdim = self.get_conv_feature_dim()
+        
+        self.encoder = timm.create_model(
+            backbone,
+            num_classes=num_classes,
+            features_only=False,
+            drop_rate=dropout,
+            drop_path_rate=0,
+            pretrained=pretrained
+        )
+        
+        if 'efficient' in backbone:
+            hdim = self.encoder.conv_head.out_channels
+            self.encoder.classifier = nn.Identity()
+        elif 'convnext' in backbone:
+            hdim = self.encoder.head.fc.in_features
+            self.encoder.head.fc = nn.Identity()
+            
+        lstm_hidden = 64
+        self.lstm = nn.LSTM(hdim, lstm_hidden, num_layers=2, dropout=dropout, bidirectional=True, batch_first=True)
+        self.head = nn.Sequential(
+            nn.Linear(2 * lstm_hidden, 256),
+#             Squeeze(),
+#             nn.BatchNorm1d(256),
+            nn.Dropout(0.3),
+            nn.LeakyReLU(0.1),
+            # nn.ReLU(),
+            nn.Linear(256, 1),
+        )
+    
+    def get_conv_feature_dim(self):
+        d, u, l, r = self.input_size
+        dummy_input = torch.randn(1, 3, r - l, u - d)
+        print(f"dummy input size {dummy_input.shape}")
+        feat = self.encoder(dummy_input)
+        return feat.shape[-1]
+        
+    def forward(self, x):
+#         print(x.shape)
+#         exit()
+        feat = self.encoder(x).flatten(start_dim=1)
+        feat = feat.reshape(self.batch_size, self.seq_len, -1)
+#         feat = self.encoder(x).unsqueeze(0)
+        feat, _ = self.lstm(feat)
+        feat = self.head(feat)
+        return feat.flatten()
+        
+        
+class Linear(nn.Module):
+    def __init__(self, clip_len, input_size):
+        super().__init__()
+        H1, H2, W1, W2 = input_size
+        H = H2 - H1
+        W = W2 - W1
+        self.linear = nn.Linear(clip_len * H * W, clip_len)
     
     def forward(self, x):
         return self.linear(x.flatten(start_dim=1))
 
 class MLP(nn.Module):
-    def __init__(self, in_features, out_features, hidden_features=64):
+    def __init__(self, in_features, out_features, hidden_features=256):
         super().__init__()
         self.in_features = in_features
         self.out_features = out_features
@@ -76,59 +167,77 @@ class PositionalEncoding(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Arguments:
-            x: Tensor, shape ``[batch_size, flattened_mat_len, window_size]``
+            x: Tensor, shape ``[batch_size, flattened_mat_len, clip_len]``
         """
         x = x + self.pe
         return self.dropout(x)
     
 class PositionalMLP(nn.Module):
-    def __init__(self, window_size):
+    def __init__(self, clip_len, input_size):
         super().__init__()
-        self.pe1 = PositionalEncoding(256, window_size)
-        self.pe2 = PositionalEncoding(1, 256)
+        H1, H2, W1, W2 = input_size
+        H = H2 - H1
+        W = W2 - W1
+        self.pe1 = PositionalEncoding(H * W, clip_len)
+        self.pe2 = PositionalEncoding(1, H * W)
         self.mlp1 = nn.Sequential(
-            MLP(window_size, window_size // 2, hidden_features=window_size),
-            MLP(window_size // 2, 1)
+            MLP(clip_len, clip_len // 2, hidden_features=clip_len),
+            MLP(clip_len // 2, 1)
         )
         self.mlp2 = nn.Sequential(
-            MLP(256, 64, hidden_features=256),
-            MLP(64, 2)
+            MLP(H * W, 64, hidden_features=H * W),
+            MLP(64, clip_len)
         )
     
     def forward(self, x):
         '''
         Arguments:
-            x: Tensor, shape ``[batch_size, window_size, mat_size, mat_size]``
+            x: Tensor, shape ``[batch_size, clip_len, mat_size, mat_size]``
         '''
         N, W, M, _ = x.shape
         x = x.flatten(start_dim=2).transpose(1, 2)
         x = self.pe1(x)
         x = self.mlp1(x).transpose(1, 2)
-        return self.mlp2(self.pe2(x)).squeeze(-1)
+        return self.mlp2(self.pe2(x)).squeeze()
         
 # try simple cnn 2d
 class RLSConv2D(nn.Module):
-    def __init__(self, num_classes, window_size=16, initial_temperature=1.0):
+    def __init__(self, args, clip_len=16, initial_temperature=1.0, num_classes=1):
         super().__init__()
-        self.window_size = window_size
+        self.clip_len = clip_len
         self.conv = nn.Sequential(
-            nn.Conv2d(window_size, 2 * window_size, 4, 2),
-            nn.BatchNorm2d(2 * window_size),
+            nn.Conv2d(clip_len, 2 * clip_len, 3, 1, 1),
+            nn.BatchNorm2d(2 * clip_len),
             nn.ReLU(),
-            nn.Conv2d(2 * window_size, 4 * window_size, 4, 2),
-            nn.BatchNorm2d(4 * window_size),
-            nn.ReLU()
+            nn.Conv2d(2 * clip_len, 4 * clip_len, 3, 1, 1),
+            nn.BatchNorm2d(4 * clip_len),
+            nn.ReLU(),
+            nn.AvgPool2d(2)
         )
+#         self.conv = nn.Sequential(
+#             nn.Conv2d(3, 16, 3, 1, 1),
+#             nn.BatchNorm2d(16),
+#             nn.ReLU(),
+#             nn.MaxPool2d(2),
+#             nn.Conv2d(16, 32, 3, 1, 1)
+#         )
         self.temperature = nn.Parameter(torch.ones(1) * initial_temperature)
+        H1, H2, W1, W2 = args.input_size
+        H = H2 - H1
+        W = W2 - W1
+        self.input_size = (H, W)
         self.conv_out = self._get_conv_out_size()
-        self.num_classes = num_classes
-        self.classification_head = MLP(self.conv_out, self.num_classes)
-        self.regression_head = MLP(self.conv_out, self.num_classes)
+        self.classification_head = nn.Linear(self.conv_out, num_classes)
         self._init_modules()
     
+    def _conv_forward(self, x):
+        x = self.conv(x)
+        return x
+        
     def _get_conv_out_size(self):
-        x = torch.randn(1, self.window_size, 16, 16)
-        return self.conv(x).view(-1).size(0)
+        x = torch.randn(1, self.clip_len, *self.input_size)
+#         x = torch.randn(1, 3, *self.input_size)
+        return self._conv_forward(x).view(-1).size(0)
     
     def _init_modules(self):
         # initialize conv blocks
@@ -140,87 +249,31 @@ class RLSConv2D(nn.Module):
                 nn.init.constant_(m.bias, 0)
                     
     def forward(self, x):
-        x = self.conv(x).flatten(start_dim=1)
-        return self.classification_head(x) / self.temperature
-#         return self.classification_head(x), self.regression_head(x)
+        x = self._conv_forward(x).flatten(start_dim=1)
+        return self.classification_head(x)
+#         return self.classification_head(x) / self.temperature
 
 # try simple cnn 3d
 class RLSConv3D(RLSConv2D):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.conv = nn.Sequential(
-            nn.Conv3d(1, 16, (40, 4, 4), (8, 2, 2)),
+            nn.Conv3d(1, 16, (25, 3, 3), 1, 1),
             nn.BatchNorm3d(16),
             nn.ReLU(),
-            nn.Conv3d(16, 32, (7, 4, 4), (4, 2, 2)),
-            nn.BatchNorm3d(32),
-            nn.ReLU()
+            nn.AvgPool3d(2),
+#             nn.Conv3d(16, 32, (10, 3, 3), 1, 1),
+#             nn.BatchNorm3d(32),
+#             nn.ReLU(),
+#             nn.AvgPool3d(2),
+#             nn.Conv3d(32, 64, 1, 1, 0),
+#             nn.BatchNorm3d(64),
+#             nn.ReLU()
         )
         self.conv_out = self._get_conv3d_out_size()
-        self.classification_head = MLP(self.conv_out, self.num_classes)
-        self.regression_head = MLP(self.conv_out, self.num_classes)
+        self.classification_head = nn.Linear(self.conv_out, self.clip_len)
         self._init_modules()
     
     def _get_conv3d_out_size(self):
-        x = torch.randn(1, 1, self.window_size, 16, 16)
-        return self.conv(x).view(-1).size(0)
-    
-# currently used
-class RLS2DModel(nn.Module):
-    def __init__(self, num_classes, layers=18, window_size=16, initial_temperature=1.0):
-        super().__init__()
-        self.layers = layers
-#         self.conv = nn.Conv2d(window_size, 3, 3, 3, 1)
-#         torch.nn.init.kaiming_normal_(self.conv.weight, a=0, mode='fan_out')
-        self.resnet = resnet_2d_models[layers]()
-        self.resnet.conv1 = nn.Conv2d(window_size, 64, 7, 2, 3, bias=False)
-        self.classification_head = MLP(self.resnet.fc.in_features, num_classes)
-        self.regression_head = MLP(self.resnet.fc.in_features, num_classes)
-        self.temperature = nn.Parameter(torch.ones(1) * initial_temperature)
-        self._init_modules()
-        self.resnet.conv1.to(torch.device('cuda'))
-    
-    def _init_modules(self):
-        # initialize conv blocks
-        for m in self.modules():
-            if isinstance(m, (nn.Conv2d, nn.Conv3d)):
-                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
-            elif isinstance(m, (nn.BatchNorm2d, nn.BatchNorm3d, nn.GroupNorm)):
-                nn.init.constant_(m.weight, 1)
-                nn.init.constant_(m.bias, 0)
-                    
-    def forward(self, x):
-        x = self.resnet.conv1(x)
-        x = self.resnet.bn1(x)
-        x = self.resnet.relu(x)
-        x = self.resnet.maxpool(x)
-
-        x = self.resnet.layer1(x)
-        x = self.resnet.layer2(x)
-        x = self.resnet.layer3(x)
-        x = self.resnet.layer4(x)
-
-        x = self.resnet.avgpool(x)
-        x = x.flatten(start_dim=1)
-        
-        return self.classification_head(x) / self.temperature
-#         return self.classification_head(x), self.regression_head(x)
-        
-class RLS3DModel(RLS2DModel):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-#         self.conv = nn.Sequential(
-#             nn.Conv3d(1, 3, 7, 1, 3),
-# #             nn.BatchNorm3d(3),
-# #             nn.ReLU()
-#         )
-        self.resnet = generate_model(self.layers)
-        self.resnet.conv1 = nn.Sequential(
-            nn.Conv3d(1, 64, 7, 1, 3)
-        )
-        self._init_modules()
-    
-class RLSViTModel(nn.Module):
-    def __init__(self):
-        super().__init__()
-        raise NotImplementedError("ViT model for RLS project is not implemented yet!")
+        x = torch.randn(1, 1, self.clip_len, *self.input_size)
+        return self._conv_forward(x).view(-1).size(0)
