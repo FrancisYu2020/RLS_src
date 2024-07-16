@@ -27,20 +27,20 @@ parser.add_argument("--warmup_epochs", default=20, help="linear warmup epochs us
 parser.add_argument("--batch_size", default=256, help="batch size used to train the model", type=int)
 parser.add_argument("--num_classes", default=2, help="number of classes for the classifier", type=int)
 parser.add_argument("--clip_len", default=16, help="window size of the input data", type=int)
-parser.add_argument("--input_size", default=[16, 16], nargs="+", help="window size of the input data", type=int)
-parser.add_argument("--label_type", default="hard", help="indicate whether use hard one-hot labels or soft numerical labels", choices=["hard", "soft"])
-parser.add_argument("--exp_label", default=None, help="extra labels to distinguish between different experiments")
-parser.add_argument("--cross_val_type", default=0, type=int, help="0 for train all val all, 1 for leave patient 1 out")
-parser.add_argument("--task", default="classification", type=str, choices=["classification", "regression"], help="indicate what kind of task to be run (regression/classification, etc.)")
-parser.add_argument("--architecture", default="3d-resnet18", choices=["2d-efficientnet", "2d-positional", "2d-linear", "3d-conv", "2d-conv", "3d-resnet10", "3d-resnet18", "2d-resnet18", "ViT-tiny"], help="architecture used")
+parser.add_argument("--input_size", default=[0, 16, 0, 16], nargs="+", help="window size of the input data", type=int)
+parser.add_argument("--val_type", default='cross+internal-val', choices=['cross-val', 'internal-val', 'cross+internal-val'], type=str, help="choose the method for validation, cross-val for validation on different patient, internal-val for validation on same patient different sleep stage, otherwise validation on both")
+# parser.add_argument("--task", default="classification", type=str, choices=["classification", "regression"], help="indicate what kind of task to be run (regression/classification, etc.)")
+parser.add_argument("--architecture", default="3d-resnet18", choices=["2d-efficientnet", "2d-positional", "2d-linear", "3d-conv", "2d-conv", "3d-resnet10", "3d-resnet18", "2d-resnet18", "2d-mlp", "2d-baseline"], help="architecture used")
 parser.add_argument("--exp_id", default=0, type=str, help="the id of the experiment")
 parser.add_argument("--debug_mode", default=0, type=int, help="0 for experiment mode, 1 for debug mode")
-parser.add_argument("--normalize_data", default=0, type=int, help="0 for raw mat input, 1 for normalized to [0, 1] and standardization")
 parser.add_argument("--patients", default=[15], type=int, nargs="+", help="patient ids included in the training")
 parser.add_argument("--checkpoint_root", default='checkpoint', type=str, help="checkpoint root path")
 parser.add_argument("--seed", default=1, type=int, help="random seed for torch")
 parser.add_argument("--split", default=-1, type=float, help="split ratio of train and val")
-parser.add_argument("--data_type", default='tal', choices=['tal_pos', 'tal', 'context'], type=str, help="choose which kind of data to use")
+parser.add_argument("--data_type", default='tal', choices=['tal_pos', 'tal', 'context', 'rgb_video'], type=str, help="choose which kind of data to use")
+parser.add_argument("--subset", default=1.0, type=float, help="training subset / training set")
+parser.add_argument("--val_freq", default=10, type=int, help="number of epochs between each validation")
+parser.add_argument("--num_workers", default=8, type=int, help="number of workers for pytorch dataloader")
 args = parser.parse_args()
 
 def main_func(args):
@@ -53,19 +53,17 @@ def main_func(args):
     if not args.debug_mode:
         wandb.init(
             # set the wandb project where this run will be logged
-            project="rls",
+            project="rls_context",
             
             # track hyperparameters and run metadata
             config={
-                "task": args.task,
                 "clip_len": args.clip_len,
                 "learning_rate": args.lr,
                 "weight_decay": args.weight_decay,
                 "batch_size": args.batch_size,
                 "architecture": args.architecture,
-                "cross_val_type": args.cross_val_type,
-                "epochs": args.epochs,
-                "num class": args.num_classes
+                "val_type": args.val_type,
+                "epochs": args.epochs
             },
         
             # experiment name
@@ -88,10 +86,21 @@ def main_func(args):
     # load data
     args.clip_len_prefix = 'win' + str(args.clip_len) + '_'
     
-    train_data, train_label, val_data, val_label = preprocess_dataset(args)
+    train_data, train_label, cross_val_data, cross_val_label, internal_val_data, internal_val_label = preprocess_dataset(args)
+    if args.subset < 1:
+        train_indices = np.random.choice(np.arange(len(train_data)), int(args.subset * len(train_data)), replace=False)
+        train_data = train_data[train_indices]
+        train_label = train_label[train_indices]
     # train_data, train_label, val_data, val_label = prepare_datasets(args)
-    print(train_data.shape, train_label.shape, train_label.sum(), val_data.shape, val_label.shape, val_label.sum())
-    print(train_data.min(), train_data.max(), train_data.mean(), val_data.min(), val_data.max(), val_data.mean())
+    print("Training metadata:", train_data.shape, train_label.shape, int(train_label.sum()))
+    print("Training statistics:", f'{train_data.mean()} ± {train_data.std()}')
+    if cross_val_data is not None:
+        print("Cross patient validation metadata:", cross_val_label.shape, int(cross_val_label.sum()))
+        print("Cross patient validation statistics:", f'{cross_val_data.mean()} ± {cross_val_data.std()}')
+    if internal_val_data is not None:
+        print("Internal validation metadata:", internal_val_label.shape, int(internal_val_label.sum()))
+        print("Internal validation statistics:", f'{internal_val_data.mean()} ± {internal_val_data.std()}')
+    
     
     # original CNN transformation
     train_transform = get_cnn_transforms(args)
@@ -99,13 +108,18 @@ def main_func(args):
     
     # create dataset and dataloader
     train_dataset = RLSDataset(args, train_data, train_label, transform=train_transform)
-    val_dataset = RLSDataset(args, val_data, val_label, transform=val_transform)
-    train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True, drop_last=False)
-    val_loader = DataLoader(dataset=val_dataset, batch_size=batch_size, shuffle=False, drop_last=False)
+    train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, num_workers=args.num_workers, shuffle=True, pin_memory=True)
+    if cross_val_data is not None:
+        cross_val_dataset = RLSDataset(args, cross_val_data, cross_val_label, transform=val_transform)
+        cross_val_loader = DataLoader(dataset=cross_val_dataset, num_workers=args.num_workers, batch_size=4 * batch_size, shuffle=False, pin_memory=True)
+    if internal_val_data is not None:
+        internal_val_dataset = RLSDataset(args, internal_val_data, internal_val_label, transform=val_transform)
+        internal_val_loader = DataLoader(dataset=internal_val_dataset, num_workers=args.num_workers, batch_size=4 * batch_size, shuffle=False, pin_memory=True)
     
     # Initialize the model
     model = get_model(args)
     model.to(device)
+    
     if not args.debug_mode:
         wandb.watch(model, log='all', log_freq=1)
     
@@ -116,30 +130,47 @@ def main_func(args):
     per_cls_weights = (1.0 - beta) / np.array(effective_num)
     neg_weight, pos_weight = per_cls_weights
     pos_weight = torch.tensor(pos_weight / neg_weight).to(device)
-    # print(pos_weight)
     cls_criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
-    # cls_criterion = DiceLoss()
-    # cls_criterion = nn.BCEWithLogitsLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=args.weight_decay)
-    # optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=args.weight_decay)
     
     # Cosine annealing scheduler with warmup
     args.warmup_epochs = max(10, args.epochs // 100)
+    args.cosine_epochs = max(20, int(args.epochs * 0.8))
+#     args.warmup_epochs = 1
+#     args.cosine_epochs = 3
     scheduler = WarmupCosineScheduler(args, optimizer)
     
-    args.best_f1, args.best_fprec, args.best_miou, args.best_pr_auc, args.best_loss, args.best_accuracy = -np.inf, -np.inf, -np.inf, -np.inf, np.inf, -np.inf
-    args.best_f1_epoch, args.best_fprec_epoch, args.best_miou_epoch, args.best_pr_auc_epoch, args.best_loss_epoch, args.best_accuracy_epoch = None, None, None, None, None, None
+    args.best_f1 = {'cross':-np.inf, 'internal':-np.inf}
+    args.best_fprec = {'cross':-np.inf, 'internal':-np.inf}
+    args.best_miou = {'cross':-np.inf, 'internal':-np.inf}
+    args.best_loss = {'cross':np.inf, 'internal':np.inf}
     
-    print('start training loop')
+    args.best_f1_epoch = {'cross':None, 'internal':None}
+    args.best_fprec_epoch = {'cross':None, 'internal':None}
+    args.best_miou_epoch = {'cross':None, 'internal':None}
+    args.best_loss_epoch = {'cross':None, 'internal':None}
+    
+    print('start training loop')        
     # main train val loop
     for epoch in range(num_epochs):
         args.epoch = epoch
+        
+        # train one epoch and get training logs
         train_loss, train_f1, train_fprec, train_miou = train(args, model, train_loader, cls_criterion, optimizer)
-    #     train_precision, train_recall, train_f1, train_fprec, train_cls_loss, train_regression_loss, train_miou = train(args, model, train_loader, cls_criterion, regression_criterion, optimizer, scheduler)
-        precision, recall, f1, fprec, val_cls_loss, accuracy, miou = val(args, model, optimizer, val_loader, cls_criterion)
-        #     val_precision, val_recall, val_f1, val_fprec, val_cls_loss, val_regression_loss, val_miou = val(args, model, val_loader, cls_criterion, regression_criterion)
+        log_data = {"train/loss":train_loss, "train/f1":train_f1, "train/f0.5":train_fprec, "train/miou":train_miou}
+        
+        if (epoch + 1) % args.val_freq == 0:
+            # val one epoch and get val logs
+            if cross_val_data is not None:
+                precision, recall, f1, fprec, val_loss, miou = val(args, model, optimizer, cross_val_loader, cls_criterion, 'cross')
+                log_data.update({"val/cross_loss": val_loss, "val/cross_f1": f1, "val/cross_f0.5":fprec, "val/cross_precision":precision, "val/cross_recall":recall, "val/cross_miou": miou})
+            if internal_val_data is not None:
+                precision, recall, f1, fprec, val_loss, miou = val(args, model, optimizer, internal_val_loader, cls_criterion, 'internal')
+                log_data.update({"val/internal_loss": val_loss, "val/internal_f1": f1, "val/internal_f0.5":fprec, "val/internal_precision":precision, "val/internal_recall":recall, "val/internal_miou": miou})
+        
         if not args.debug_mode:
-            wandb.log({"Classification/val/loss": val_cls_loss, "Classification/val/f1": f1, "Classification/val/f0.5":fprec, "Classification/val/precision":precision, "Classification/val/recall":recall, "Classification/val/miou": miou, "Classification/train/loss":train_loss, "Classification/train/f1":train_f1, "Classification/train/f0.5":train_fprec, "Classification/train/miou":train_miou})
+            wandb.log(log_data)
+                
         if scheduler:
             initial_lr = scheduler.get_last_lr()
             scheduler.step()
@@ -148,8 +179,10 @@ def main_func(args):
     
     if not args.debug_mode:
         wandb.finish()
-        torch.save({'f1':args.best_f1, 'f0.5':args.best_fprec, 'accuracy':args.best_accuracy, 'miou':args.best_miou, 'best_f1_epoch':args.best_f1_epoch, 'best_f0.5_epoch':args.best_fprec_epoch, 'best_accuracy_epoch':args.best_accuracy_epoch, 'best_miou_epoch':args.best_miou_epoch}, os.path.join(args.checkpoint_dir, 'val_results.pth'))
-    print(f'The best f1 score is {args.best_f1 * 100:.2f} at epoch {args.best_f1_epoch}; The best f0.5 score is {args.best_fprec * 100:.2f} at epoch {args.best_fprec_epoch}; The best miou score is {args.best_miou * 100:.2f}% at epoch {args.best_miou_epoch}', flush=True)
+        torch.save({'f1':args.best_f1, 'f0.5':args.best_fprec, 'miou':args.best_miou, 'best_f1_epoch':args.best_f1_epoch, 'best_f0.5_epoch':args.best_fprec_epoch, 'best_miou_epoch':args.best_miou_epoch}, os.path.join(args.checkpoint_dir, 'val_results.pth'))
+    print(f'The best f1 score is {args.best_f1} at epoch {args.best_f1_epoch}')
+    print(f'The best f0.5 score is {args.best_fprec} at epoch {args.best_fprec_epoch}')
+    print(f'The best miou score is {args.best_miou}% at epoch {args.best_miou_epoch}')
     return args.best_f1
 
 if __name__ == '__main__':

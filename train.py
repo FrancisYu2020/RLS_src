@@ -41,7 +41,7 @@ def train(args, model, train_loader, cls_criterion, optimizer, scheduler=None):
 #         print(model(images).shape, labels.shape)
         pred = model(images).squeeze()
         loss = cls_criterion(pred, labels)
-        train_loss += loss * len(images)
+        train_loss += loss.item() * len(images)
         train_pred.append(pred)
         train_labels.append(labels)
         # Backward pass and optimization
@@ -54,10 +54,10 @@ def train(args, model, train_loader, cls_criterion, optimizer, scheduler=None):
     train_f1 = fbeta_score(y_true, y_pred, beta=1)
     train_fprec = fbeta_score(y_true, y_pred, beta=0.5)
     train_miou = np.logical_and(y_true, y_pred).sum() / (np.logical_or(y_true, y_pred).sum() + 1e-8)
+    train_loss /= len(y_pred)
     return train_loss, train_f1, train_fprec, train_miou
 
-        
-def val(args, model, optimizer, val_loader, cls_criterion):
+def val(args, model, optimizer, val_loader, cls_criterion, val_type, epsilon=1e-8):
     '''
     args: input arguments from main function
     model: model to be evaluated 
@@ -67,6 +67,39 @@ def val(args, model, optimizer, val_loader, cls_criterion):
     regression_criterion: regression loss criterion
     '''
     model.eval()
+    
+    running_loss, y_pred, y_true = val_loop(args, model, val_loader, cls_criterion)
+    
+    precision = precision_score(y_true, y_pred, zero_division=0)
+    recall = recall_score(y_true, y_pred, zero_division=0)
+    f1 = fbeta_score(y_true, y_pred, beta=1)
+    fprec = fbeta_score(y_true, y_pred, beta=0.5)
+    miou = np.logical_and(y_true, y_pred).sum() / (np.logical_or(y_true, y_pred).sum() + epsilon)
+    
+    def save_checkpoint_template(metric, best_metric, best_metric_epoch, metric_name):
+        if metric > best_metric[val_type]:
+            best_metric[val_type] = metric
+            best_metric_epoch[val_type] = args.epoch + 1
+            if not args.debug_mode:
+                torch.save({'state_dict':model.state_dict(), 'optimizer':optimizer.state_dict(), 'precision':precision, 'recall':recall, 'f1':f1, 'cls_loss':running_loss}, os.path.join(args.checkpoint_dir, f'{val_type}_best_{metric_name}.ckpt'))
+            tqdm.write(f'Best {val_type}_{metric_name} model saved!')
+            
+    save_checkpoint_template(f1, args.best_f1, args.best_f1_epoch, 'f1')
+    save_checkpoint_template(fprec, args.best_fprec, args.best_fprec_epoch, 'f0.5')
+    save_checkpoint_template(miou, args.best_miou, args.best_miou_epoch, 'miou')
+    tqdm.write(f'Epoch [{args.epoch+1}/{args.epochs}], CLS Loss: {running_loss}, F1: {f1 * 100:.2f}%, F0.5: {fprec * 100:.2f}%, precision: {precision * 100:.2f}%, recall: {recall * 100:.2f}%, miou: {miou * 100:.2f}%')
+    return precision, recall, f1, fprec, running_loss, miou
+
+
+def val_loop(args, model, val_loader, cls_criterion):
+    '''
+    One single epoch of evaluation given the validation set
+    
+    Returns:
+        - running loss: validation loss
+        - y_pred: prediction from the model (N, ) numpy array
+        - y_true: ground truth labels (N, ) numpy array
+    '''
     running_loss = 0
     y_score, y_true = [], []
     for i, (images, labels) in tqdm(enumerate(val_loader)):
@@ -84,37 +117,4 @@ def val(args, model, optimizer, val_loader, cls_criterion):
     running_loss /= len(y_score)
     y_pred = y_score > 0.5
     y_true = torch.cat(y_true).cpu().detach().numpy()
-    precision, recall, _ = precision_recall_curve(y_true, y_score)
-    pr_auc = auc(recall, precision)
-    accuracy = accuracy_score(y_true, y_pred) * 100
-    precision = precision_score(y_true, y_pred, zero_division=0)
-    recall = recall_score(y_true, y_pred, zero_division=0)
-    f1 = fbeta_score(y_true, y_pred, beta=1)
-    fprec = fbeta_score(y_true, y_pred, beta=0.5)
-    miou = np.logical_and(y_true, y_pred).sum() / (np.logical_or(y_true, y_pred).sum() + 1e-8)
-        
-    if f1 > args.best_f1:
-        args.best_f1 = f1
-        args.best_f1_epoch = args.epoch + 1
-        if not args.debug_mode:
-            torch.save({'state_dict':model.state_dict(), 'optimizer':optimizer.state_dict(), 'precision':precision, 'recall':recall, 'f1':f1, 'cls_loss':running_loss}, os.path.join(args.checkpoint_dir, 'best_f1.ckpt'))
-        tqdm.write('Best F1 model saved!')
-            
-    if fprec > args.best_fprec:
-        args.best_fprec = fprec
-        args.best_fprec_epoch = args.epoch + 1
-        if not args.debug_mode:
-            torch.save({'state_dict':model.state_dict(), 'optimizer':optimizer.state_dict(), 'precision':precision, 'recall':recall, 'f1':f1, 'f0.5':fprec, 'cls_loss': running_loss}, os.path.join(args.checkpoint_dir, 'best_f0.5.ckpt'))
-        tqdm.write('Best F0.5 model saved!')
-    
-    if miou > args.best_miou:
-        args.best_miou = miou
-        args.best_miou_epoch = args.epoch + 1
-        if not args.debug_mode:
-            torch.save({'state_dict':model.state_dict(), 'optimizer':optimizer.state_dict(), 'precision':precision, 'recall':recall, 'f1':f1, 'f0.5':fprec, 'cls_loss':running_loss, 'miou':miou}, os.path.join(args.checkpoint_dir, 'best_miou.ckpt'))
-        tqdm.write('Best miou model saved!')
-    tqdm.write(f'Epoch [{args.epoch+1}/{args.epochs}], CLS Loss: {loss}, F1: {f1 * 100:.2f}%, F0.5: {fprec * 100:.2f}%, precision: {precision * 100:.2f}%, recall: {recall * 100:.2f}%, miou: {miou * 100:.2f}%')
-#     tqdm.write(f'Epoch [{args.epoch+1}/{args.epochs}], CLS Loss: {bce_loss}, f loss: {f_loss}, contrastive loss: {contrastive_loss}, rank loss: {rank_loss}, PR AUC: {pr_auc:.4f}')
-#     return bce_loss, regression_loss, pr_auc, accuracy
-    return precision, recall, f1, fprec, loss, accuracy, miou
-        
+    return running_loss, y_pred, y_true

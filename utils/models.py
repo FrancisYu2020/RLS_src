@@ -19,12 +19,10 @@ def get_model(args):
         num_classes = 1
     else:
         num_classes = clip_len
-    if 'resnet' in architecture_name:
-        dimension, architecture = architecture_name.split('-')
-        if dimension[0] == '2':
-            return RLS2DModel(num_classes, int(architecture[-2:]), clip_len=clip_len, num_classes=num_classes)
-        else:
-            return RLS3DModel(num_classes, int(architecture[-2:]), clip_len=clip_len, num_classes=num_classes)
+    if architecture_name == '2d-resnet18':
+        return RLS2DResNet18(args, num_classes=1)
+    elif architecture_name == '2d-baseline':
+        return RLS2DBaseline(args, num_classes=1)
     elif architecture_name == "2d-conv":
         return RLSConv2D(args, clip_len=clip_len, num_classes=num_classes)
     elif architecture_name == '3d-conv':
@@ -35,6 +33,8 @@ def get_model(args):
         return PositionalMLP(clip_len, args.input_size)
     elif architecture_name == '2d-efficientnet':
         return EfficientNet(args, "efficientnet_b0.ra_in1k", num_classes)
+    elif architecture_name == '2d-mlp':
+        return MLP(clip_len, args.input_size, num_classes)
     else:
         raise NotImplementedError("ViT model part not implemented!")
 
@@ -48,6 +48,54 @@ def load_model(args, ckpt_name):
     model = get_model(args, args.clip_len)
     model.load_state_dict(torch.load(checkpoint_path)['state_dict'])
     return model
+
+class RLS2DResNet18(nn.Module):
+    def __init__(self, args, num_classes):
+        super().__init__()
+        self.resnet = resnet_2d_models[18](pretrained=False)
+        self.resnet.fc = nn.Linear(self.resnet.fc.in_features, num_classes)
+    
+    def forward(self, x):
+        return self.resnet(x)
+    
+# try simple cnn 2d
+class RLS2DBaseline(nn.Module):
+    def __init__(self, args, num_classes):
+        super().__init__()
+        self.conv = nn.Sequential(
+            nn.Conv2d(3, 16, 3, 1, 1),
+            nn.BatchNorm2d(16),
+            nn.ReLU(),
+            nn.AvgPool2d(2)
+        )
+        H1, H2, W1, W2 = args.input_size
+        H = H2 - H1
+        W = W2 - W1
+        self.input_size = (H, W)
+        self.conv_out = self._get_conv_out_size()
+        self.classification_head = nn.Linear(self.conv_out, num_classes)
+        self._init_modules()
+    
+    def _conv_forward(self, x):
+        x = self.conv(x)
+        return x
+        
+    def _get_conv_out_size(self):
+        x = torch.randn(1, 3, *self.input_size)
+        return self._conv_forward(x).view(-1).size(0)
+    
+    def _init_modules(self):
+        # initialize conv blocks
+        for m in self.modules():
+            if isinstance(m, (nn.Conv2d, nn.Conv3d)):
+                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
+            elif isinstance(m, (nn.BatchNorm2d, nn.BatchNorm3d, nn.GroupNorm)):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+                    
+    def forward(self, x):
+        x = self._conv_forward(x).flatten(start_dim=1)
+        return self.classification_head(x)
 
 class Squeeze(nn.Module):
     def __init__(self):
@@ -127,29 +175,44 @@ class EfficientNet(nn.Module):
         
         
 class Linear(nn.Module):
-    def __init__(self, clip_len, input_size):
+    def __init__(self, clip_len, input_size, num_classes):
         super().__init__()
         H1, H2, W1, W2 = input_size
         H = H2 - H1
         W = W2 - W1
-        self.linear = nn.Linear(clip_len * H * W, clip_len)
+        self.linear = nn.Linear(clip_len * H * W, num_classes)
     
     def forward(self, x):
         return self.linear(x.flatten(start_dim=1))
 
 class MLP(nn.Module):
-    def __init__(self, in_features, out_features, hidden_features=256):
+    def __init__(self, clip_len, input_size, num_classes, hidden_size=256):
         super().__init__()
-        self.in_features = in_features
-        self.out_features = out_features
+        H1, H2, W1, W2 = input_size
+        H = H2 - H1
+        W = W2 - W1
         self.mlp = nn.Sequential(
-            nn.Linear(in_features, hidden_features),
+            nn.Linear(clip_len * H * W, hidden_size),
             nn.ReLU(),
-            nn.Linear(hidden_features, out_features)
+            nn.Linear(hidden_size, num_classes)
         )
     
     def forward(self, x):
-        return self.mlp(x)
+        return self.mlp(x.flatten(start_dim=1))
+
+# class MLP(nn.Module):
+#     def __init__(self, in_features, out_features, hidden_features=256):
+#         super().__init__()
+#         self.in_features = in_features
+#         self.out_features = out_features
+#         self.mlp = nn.Sequential(
+#             nn.Linear(in_features, hidden_features),
+#             nn.ReLU(),
+#             nn.Linear(hidden_features, out_features)
+#         )
+    
+#     def forward(self, x):
+#         return self.mlp(x)
 
 class PositionalEncoding(nn.Module):
     # modified from https://pytorch.org/tutorials/beginner/transformer_tutorial.html
@@ -209,9 +272,9 @@ class RLSConv2D(nn.Module):
             nn.Conv2d(clip_len, 2 * clip_len, 3, 1, 1),
             nn.BatchNorm2d(2 * clip_len),
             nn.ReLU(),
-            nn.Conv2d(2 * clip_len, 4 * clip_len, 3, 1, 1),
-            nn.BatchNorm2d(4 * clip_len),
-            nn.ReLU(),
+#             nn.Conv2d(2 * clip_len, 4 * clip_len, 3, 1, 1),
+#             nn.BatchNorm2d(4 * clip_len),
+#             nn.ReLU(),
             nn.AvgPool2d(2)
         )
 #         self.conv = nn.Sequential(
@@ -258,22 +321,15 @@ class RLSConv3D(RLSConv2D):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.conv = nn.Sequential(
-            nn.Conv3d(1, 16, (25, 3, 3), 1, 1),
+            nn.Conv3d(3, 16, 3, 1, 1),
             nn.BatchNorm3d(16),
             nn.ReLU(),
             nn.AvgPool3d(2),
-#             nn.Conv3d(16, 32, (10, 3, 3), 1, 1),
-#             nn.BatchNorm3d(32),
-#             nn.ReLU(),
-#             nn.AvgPool3d(2),
-#             nn.Conv3d(32, 64, 1, 1, 0),
-#             nn.BatchNorm3d(64),
-#             nn.ReLU()
         )
         self.conv_out = self._get_conv3d_out_size()
-        self.classification_head = nn.Linear(self.conv_out, self.clip_len)
+        self.classification_head = nn.Linear(self.conv_out, 1)
         self._init_modules()
     
     def _get_conv3d_out_size(self):
-        x = torch.randn(1, 1, self.clip_len, *self.input_size)
+        x = torch.randn(1, 3, self.clip_len, *self.input_size)
         return self._conv_forward(x).view(-1).size(0)

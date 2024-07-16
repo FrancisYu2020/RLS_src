@@ -237,7 +237,45 @@ def make_labels(data, timestamps, positive_csv, filter_timestamp=None, clip_len=
     print(len(train_label), (labels[int(len(labels) * split_ratio):] > 0).sum())
     return train_data, train_label, train_roi_label, val_data, val_label, val_roi_label
 
-def make_context_labels(data, timestamps, positive_csv, clip_len=16, split_ratio=0.9, overnight=True, calibrate_value=4.65):
+def filter_timestamp_func(timestamps):
+    mask = np.array([True] * len(timestamps))
+    # filter out unuseful part
+    if filter_timestamp:
+        filter_timestamp = pd.read_csv(filter_timestamp)
+        
+        # main loop variables, i for iteration through each frame, j for iteration through the positive regions
+        i, j = 0, 0
+    
+        # initialize the time stamps of the very first positive region
+        start_h, start_min, start_s, end_h, end_min, end_s = filter_timestamp.iloc[j]
+        start_ts, end_ts = start_h * 3600 + start_min * 60 + start_s, end_h * 3600 + end_min * 60 + end_s
+    
+        # calibrate the timestamp mismatch between mat and EMG data
+        start_ts -= calibrate_value
+        end_ts -= calibrate_value
+    
+        # loop over the data to filter out wake stages
+        while i < len(timestamps):
+            ts = converted_timestamp(timestamps[i])
+        
+            # label positive signals
+            if start_ts <= ts <= end_ts:
+                mask[i] = False
+            elif ts > end_ts:
+                j += 1
+                if j >= len(filter_timestamp):
+                    print(f'timestamps at break: {timestamps[i]}')
+                    break
+            start_h, start_min, start_s, end_h, end_min, end_s = filter_timestamp.iloc[j]
+            if start_h < 20:
+                start_h += 24
+                end_h += 24
+            start_ts, end_ts = start_h * 3600 + start_min * 60 + start_s, end_h * 3600 + end_min * 60 + end_s
+            
+            i += 1
+    return mask
+
+def make_context_labels(data, timestamps, positive_csv, filter_timestamp=None, clip_len=16, split_ratio=0.9, overnight=True, calibrate_value=4.65):
     '''
     data: sensing mat pressure matrices, dimension = (N, 16, 16)
     timestamps: the time stamps for each frame of pressure matrix, dimension = (N, ), each element is a formatted string
@@ -248,7 +286,7 @@ def make_context_labels(data, timestamps, positive_csv, clip_len=16, split_ratio
     calibrate_value: potential timestamp mismatch between mat and EMG data, the value represents how many seconds does the mat advance the EMG data
     '''
     labels = np.zeros(len(timestamps))
-    
+            
     # main loop variables, i for iteration through each frame, j for iteration through the positive regions
     i, j = 0, 0
     

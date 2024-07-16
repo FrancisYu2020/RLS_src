@@ -7,6 +7,8 @@ import torch
 import torch.nn.functional as F
 
 def preprocess_data(data, labels, unravel=False, upperbound=255, z=3):
+    if data is None:
+        return data, labels
     # use z score to filter outlier values
     if unravel:
         N, C, H, W = data.shape
@@ -28,58 +30,55 @@ def preprocess_data(data, labels, unravel=False, upperbound=255, z=3):
     return data, labels
 
 def preprocess_dataset(args):
-    train_data, train_label, val_data, val_label = prepare_datasets(args)
-    print(train_data.max(), val_data.max())
-    train_data, train_label = preprocess_data(train_data, train_label, unravel=('conv' not in args.architecture))
-    val_data, val_label = preprocess_data(val_data, val_label, unravel=('conv' not in args.architecture))
-    return train_data, train_label, val_data, val_label
+    unravel = False
+#     unravel = 'conv' not in args.architecture
+    train_data, train_label, cross_val_data, cross_val_label, internal_val_data, internal_val_label = prepare_datasets(args)
+    train_data, train_label = preprocess_data(train_data, train_label, unravel=unravel)
+    cross_val_data, cross_val_label = preprocess_data(cross_val_data, cross_val_label, unravel=unravel)
+    internal_val_data, internal_val_label = preprocess_data(internal_val_data, internal_val_label, unravel=unravel)
+    return train_data, train_label, cross_val_data, cross_val_label, internal_val_data, internal_val_label
 
 def get_cnn_transforms(args, train=True):
     # cnn transformation
+    framewise_transforms = ['2d-resnet18', '2d-baseline']
+    frame_trans = args.architecture in framewise_transforms
+    frame_trans = 1 # currently try all the methods with rgb_video
     if train:
-        if 'efficientnet' in args.architecture:
+        if frame_trans:
             transform = transforms.Compose([
                 transforms.ToPILImage(),
                 transforms.Grayscale(num_output_channels=3),
                 transforms.RandomHorizontalFlip(p=0.5),
                 transforms.RandomRotation(degrees=(-30, 30)),
                 transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
             ])
         else:
             transform = transforms.Compose([
-#             transforms.ToTensor(),
-                CustomToTensor(args.clip_len, args.normalize_data),
+                CustomToTensor(args.clip_len),
                 transforms.RandomRotation(degrees=(-20, 20)),
-                # transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
             ])
     else:
-        if 'efficientnet' in args.architecture:
+        if frame_trans:
             transform = transforms.Compose([
                 transforms.ToPILImage(),
                 transforms.Grayscale(num_output_channels=3),
                 transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
             ])
         else:
             transform = transforms.Compose([
-#             transforms.ToTensor(),
-                CustomToTensor(args.clip_len, args.normalize_data),
-    #             transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+                CustomToTensor(args.clip_len),
             ])
     return transform
 
 class CustomToTensor:
-    def __init__(self, clip_len, normalize=True, mean=None, std=None):
-        self.normalize = normalize
+    def __init__(self, clip_len):
+        pass
 
     def __call__(self, img):
         img = img.T
         img = torch.from_numpy(img)
-        if self.normalize:
-            # Normalize the tensor
-            mean = torch.tensor(self.mean).view(-1, 1, 1)
-            std = torch.tensor(self.std).view(-1, 1, 1)
-            img = (img - mean) / std
-        
         return img
     
 class RLSDataset(Dataset):
@@ -91,7 +90,7 @@ class RLSDataset(Dataset):
             transform (callable, optional): Optional transform to be applied on a sample.
         """
         self.transform = transform
-        self.images = data
+        self.images = (data * 255).astype(np.uint8)
         self.label = label
         self.dimension = int(args.architecture[0])
         if not transform:
@@ -106,14 +105,22 @@ class RLSDataset(Dataset):
 
     def __getitem__(self, idx):
         image, label = self.images[idx], self.label[idx]
-        image = self.transform(image.T)
-        if self.dimension == 3:
-            image = image.unsqueeze(0)
+        if len(image.shape) == 2:
+            image = self.transform(image.T)
+        elif len(image.shape) == 3:
+            video = []
+            for c in range(image.shape[0]):
+                video.append(self.transform(image[c].T).unsqueeze(1))
+            image = torch.cat(video, dim=1)
+        else:
+            raise NotImplementedError(f"Invalid image/video shape {image.shape}")
         return image, label
 
 def prepare_datasets(args):
     data_root = 'data'
     data_type = args.data_type
+    if data_type == 'rgb_video':
+        data_type = 'context'
     patients = {
         15: 'data/patient15-04-12-2024-relabeled', 
         16: 'data/patient16-04-13-2024',
@@ -146,29 +153,46 @@ def prepare_datasets(args):
     }
 
     data_paths = []
+    cross_val_data, cross_val_label = None, None
+    internal_val_data, internal_val_label = None, None
     for patient_id in args.patients:
         data_paths.append(patients[patient_id])
-    if args.cross_val_type == 0:
+    if args.val_type == 'internal-val':
         train_data = np.concatenate([np.load(os.path.join(path, args.clip_len_prefix + f'{data_type}_train_data.npy')).astype(np.float32) for path in data_paths], axis=0)
         train_label = np.concatenate([np.load(os.path.join(path, args.clip_len_prefix + f'{data_type}_train_label.npy')) for path in data_paths], axis=0)
-        val_data = np.concatenate([np.load(os.path.join(path, args.clip_len_prefix + f'{data_type}_val_data.npy')).astype(np.float32) for path in data_paths], axis=0)
-        val_label = np.concatenate([np.load(os.path.join(path, args.clip_len_prefix + f'{data_type}_val_label.npy')) for path in data_paths], axis=0)
-    elif args.cross_val_type == 1:
-        assert 0 < args.split < 1, "Please set the train split ratio when cross_val_type is 1"
+        internal_val_data = np.concatenate([np.load(os.path.join(path, args.clip_len_prefix + f'{data_type}_val_data.npy')).astype(np.float32) for path in data_paths], axis=0)
+        internal_val_label = np.concatenate([np.load(os.path.join(path, args.clip_len_prefix + f'{data_type}_val_label.npy')) for path in data_paths], axis=0)
+    elif args.val_type == 'cross-val':
+        assert 0 < args.split < 1, "Please set the train split ratio when cross patient val is used"
         split = max(1, int(args.split * len(data_paths)))
         print(f'Training set patients: {data_paths[:split]}')
         print(f'Validation set patients: {data_paths[split:]}')
         train_data = np.concatenate([np.load(os.path.join(path, args.clip_len_prefix + f'{data_type}_train_data_full.npy')).astype(np.float32) for path in data_paths[:split]], axis=0)
         train_label = np.concatenate([np.load(os.path.join(path, args.clip_len_prefix + f'{data_type}_train_label_full.npy')) for path in data_paths[:split]], axis=0)
-        val_data = np.concatenate([np.load(os.path.join(path, args.clip_len_prefix + f'{data_type}_val_data_full.npy')).astype(np.float32) for path in data_paths[split:]], axis=0)
-        val_label = np.concatenate([np.load(os.path.join(path, args.clip_len_prefix + f'{data_type}_val_label_full.npy')) for path in data_paths[split:]], axis=0)
+        cross_val_data = np.concatenate([np.load(os.path.join(path, args.clip_len_prefix + f'{data_type}_val_data_full.npy')).astype(np.float32) for path in data_paths[split:]], axis=0)
+        cross_val_label = np.concatenate([np.load(os.path.join(path, args.clip_len_prefix + f'{data_type}_val_label_full.npy')) for path in data_paths[split:]], axis=0)
+    elif args.val_type == 'cross+internal-val':
+        assert 0 < args.split < 1, "Please set the train split ratio when cross patient val is used"
+        split = max(1, int(args.split * len(data_paths)))
+        print(f'Training set patients: {data_paths[:split]}')
+        print(f'Validation set patients: {data_paths[split:]}')
+        train_data = np.concatenate([np.load(os.path.join(path, args.clip_len_prefix + f'{data_type}_train_data.npy')).astype(np.float32) for path in data_paths[:split]], axis=0)
+        train_label = np.concatenate([np.load(os.path.join(path, args.clip_len_prefix + f'{data_type}_train_label.npy')) for path in data_paths[:split]], axis=0)
+        cross_val_data = np.concatenate([np.load(os.path.join(path, args.clip_len_prefix + f'{data_type}_val_data_full.npy')).astype(np.float32) for path in data_paths[split:]], axis=0)
+        cross_val_label = np.concatenate([np.load(os.path.join(path, args.clip_len_prefix + f'{data_type}_val_label_full.npy')) for path in data_paths[split:]], axis=0)
+        internal_val_data = np.concatenate([np.load(os.path.join(path, args.clip_len_prefix + f'{data_type}_val_data.npy')).astype(np.float32) for path in data_paths[:split]], axis=0)
+        internal_val_label = np.concatenate([np.load(os.path.join(path, args.clip_len_prefix + f'{data_type}_val_label.npy')) for path in data_paths[:split]], axis=0)
     else:
-        leave_out_idx = args.cross_val_type - 1
-        train_data = np.concatenate([np.load(os.path.join(data_paths[i], args.clip_len_prefix + f'{data_type}_train_data.npy')).astype(np.float32) for i in range(len(data_paths)) if i != leave_out_idx], axis=0)
-        train_label = np.concatenate([np.load(os.path.join(data_paths[i], args.clip_len_prefix + f'{data_type}_train_label.npy')) for i in range(len(data_paths)) if i != leave_out_idx], axis=0)
-        val_data = np.concatenate([np.load(os.path.join(data_paths[leave_out_idx], args.clip_len_prefix + f'{data_type}_train_data.npy')).astype(np.float32), np.load(os.path.join(data_paths[leave_out_idx], args.clip_len_prefix + f'{data_type}_val_data.npy')).astype(np.float32)], axis=0)
-        val_label = np.concatenate([np.load(os.path.join(data_paths[leave_out_idx], args.clip_len_prefix + f'{data_type}_train_label.npy')), np.load(os.path.join(data_paths[leave_out_idx], args.clip_len_prefix + f'{data_type}_val_label.npy'))], axis=0)
+        raise NotImplementedError(f'{args.val_type} validation method not implemented!')
     H1, H2, W1, W2 = args.input_size
     train_data = train_data[:, :, H1:H2, W1:W2]
-    val_data = val_data[:, :, H1:H2, W1:W2]
-    return train_data, train_label, val_data, val_label
+    if cross_val_data is not None:
+        cross_val_data = cross_val_data[:, :, H1:H2, W1:W2]
+    if internal_val_data is not None:
+        internal_val_data = internal_val_data[:, :, H1:H2, W1:W2]
+    if args.data_type == 'rgb_video':
+        center_frame = train_data.shape[1] // 2
+        train_data = train_data[:, center_frame, ...]
+        cross_val_data = cross_val_data[:, center_frame, ...]
+        internal_val_data = internal_val_data[:, center_frame, ...]
+    return train_data, train_label, cross_val_data, cross_val_label, internal_val_data, internal_val_label
