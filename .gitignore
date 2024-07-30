@@ -18,3 +18,4 @@ checkpoint
 !make_dataset.ipynb
 !inspect_data.ipynb
 slurm_out
+pretrained_checkpoint

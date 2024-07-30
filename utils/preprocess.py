@@ -69,7 +69,7 @@ def converted_timestamp(timestamp):
         ts[0] = int(ts[0]) + 24
     ts = int(ts[0]) * 3600 + int(ts[1]) * 60 + float(ts[2])
     return ts
-
+    
 def make_labels(data, timestamps, positive_csv, filter_timestamp=None, clip_len=16, split_ratio=0.9, overlap_train=True, balanced=True, overnight=True, plot_statistics=False, calibrate_value=3, label_threshold=0.1):
     '''
     data: sensing mat pressure matrices, dimension = (N, 16, 16)
@@ -80,42 +80,7 @@ def make_labels(data, timestamps, positive_csv, filter_timestamp=None, clip_len=
     overnight: indicate whether the experiment conducted is overnight, if True, the hours < 12 need to add 24 since they are overnight
     calibrate_value: potential timestamp mismatch between mat and EMG data, the value represents how many seconds does the mat advance the EMG data
     '''
-    import pandas as pd
-    mask = np.array([True] * len(timestamps))
-    # filter out unuseful part
-    if filter_timestamp:
-        filter_timestamp = pd.read_csv(filter_timestamp)
-        
-        # main loop variables, i for iteration through each frame, j for iteration through the positive regions
-        i, j = 0, 0
-    
-        # initialize the time stamps of the very first positive region
-        start_h, start_min, start_s, end_h, end_min, end_s = filter_timestamp.iloc[j]
-        start_ts, end_ts = start_h * 3600 + start_min * 60 + start_s, end_h * 3600 + end_min * 60 + end_s
-    
-        # calibrate the timestamp mismatch between mat and EMG data
-        start_ts -= calibrate_value
-        end_ts -= calibrate_value
-    
-        # loop over the data to filter out wake stages
-        while i < len(timestamps):
-            ts = converted_timestamp(timestamps[i])
-        
-            # label positive signals
-            if start_ts <= ts <= end_ts:
-                mask[i] = False
-            elif ts > end_ts:
-                j += 1
-                if j >= len(filter_timestamp):
-                    print(f'timestamps at break: {timestamps[i]}')
-                    break
-            start_h, start_min, start_s, end_h, end_min, end_s = filter_timestamp.iloc[j]
-            if start_h < 20:
-                start_h += 24
-                end_h += 24
-            start_ts, end_ts = start_h * 3600 + start_min * 60 + start_s, end_h * 3600 + end_min * 60 + end_s
-            
-            i += 1
+    mask = filter_timestamp_func(timestamps, filter_timestamp, calibrate_value)
         
     # abandon the last few frames
     data = data[mask]
@@ -167,11 +132,6 @@ def make_labels(data, timestamps, positive_csv, filter_timestamp=None, clip_len=
     data = data[:num_samples]
     labels = labels[:i]
     labels = labels.reshape(-1, clip_len)
-    # filter_idx = data.max(axis=(1, 2, 3)) < 160
-    # data = data[filter_idx]
-    # labels = labels[filter_idx]
-    # num_samples = filter_idx.sum()
-    # print(f'Number of samples after filtering is {num_samples}')
     original_labels = labels
     
     # get roi labels
@@ -237,45 +197,7 @@ def make_labels(data, timestamps, positive_csv, filter_timestamp=None, clip_len=
     print(len(train_label), (labels[int(len(labels) * split_ratio):] > 0).sum())
     return train_data, train_label, train_roi_label, val_data, val_label, val_roi_label
 
-def filter_timestamp_func(timestamps):
-    mask = np.array([True] * len(timestamps))
-    # filter out unuseful part
-    if filter_timestamp:
-        filter_timestamp = pd.read_csv(filter_timestamp)
-        
-        # main loop variables, i for iteration through each frame, j for iteration through the positive regions
-        i, j = 0, 0
-    
-        # initialize the time stamps of the very first positive region
-        start_h, start_min, start_s, end_h, end_min, end_s = filter_timestamp.iloc[j]
-        start_ts, end_ts = start_h * 3600 + start_min * 60 + start_s, end_h * 3600 + end_min * 60 + end_s
-    
-        # calibrate the timestamp mismatch between mat and EMG data
-        start_ts -= calibrate_value
-        end_ts -= calibrate_value
-    
-        # loop over the data to filter out wake stages
-        while i < len(timestamps):
-            ts = converted_timestamp(timestamps[i])
-        
-            # label positive signals
-            if start_ts <= ts <= end_ts:
-                mask[i] = False
-            elif ts > end_ts:
-                j += 1
-                if j >= len(filter_timestamp):
-                    print(f'timestamps at break: {timestamps[i]}')
-                    break
-            start_h, start_min, start_s, end_h, end_min, end_s = filter_timestamp.iloc[j]
-            if start_h < 20:
-                start_h += 24
-                end_h += 24
-            start_ts, end_ts = start_h * 3600 + start_min * 60 + start_s, end_h * 3600 + end_min * 60 + end_s
-            
-            i += 1
-    return mask
-
-def make_context_labels(data, timestamps, positive_csv, filter_timestamp=None, clip_len=16, split_ratio=0.9, overnight=True, calibrate_value=4.65):
+def make_context_labels(data, timestamps, positive_csv, filter_timestamp=None, clip_len=16, split_ratio=0.9, overnight=True, calibrate_value=4.65, more_negative=False):
     '''
     data: sensing mat pressure matrices, dimension = (N, 16, 16)
     timestamps: the time stamps for each frame of pressure matrix, dimension = (N, ), each element is a formatted string
@@ -284,7 +206,14 @@ def make_context_labels(data, timestamps, positive_csv, filter_timestamp=None, c
     split_ratio: train data : val data ratio
     overnight: indicate whether the experiment conducted is overnight, if True, the hours < 12 need to add 24 since they are overnight
     calibrate_value: potential timestamp mismatch between mat and EMG data, the value represents how many seconds does the mat advance the EMG data
+    more_negative: True if use more 'hard negatives' (we assume large pressure change value to be movements)
     '''
+    # get the mask to filter the awake timestamps
+    mask = filter_timestamp_func(timestamps, filter_timestamp, calibrate_value)
+    mask = create_context_window_with_padding(mask, clip_len)
+    frame_mask = mask.sum(axis=-1) == clip_len
+    
+    
     labels = np.zeros(len(timestamps))
             
     # main loop variables, i for iteration through each frame, j for iteration through the positive regions
@@ -321,26 +250,11 @@ def make_context_labels(data, timestamps, positive_csv, filter_timestamp=None, c
             
         i += 1
     
-    def create_context_window_with_padding(arr, L):
-        '''
-        Function to make (N, H, W) array to (N, L, H, W) array, the first and last several frames are padded with the edge frames
-        '''
-        N, H, W = arr.shape
-        half_L = L // 2
-        
-        # Pad the array with duplicates of the first and last frames
-        padded_arr = np.pad(arr, ((half_L, half_L), (0, 0), (0, 0)), mode='edge')
-        
-        # Initialize the new array
-        context_window_array = np.zeros((N, L, H, W))
-        
-        # Fill the new array using a sliding window approach
-        for i in range(N):
-            context_window_array[i] = padded_arr[i:i+L]
-        
-        return context_window_array
-    
     data  = create_context_window_with_padding(data, clip_len)
+    
+    # only take the non-awake part
+    data = data[frame_mask]
+    labels = labels[frame_mask]
     
     # split train and val data, label
     # use all the held out data samples for validation
@@ -363,6 +277,11 @@ def make_context_labels(data, timestamps, positive_csv, filter_timestamp=None, c
     negative_train_data = train_data[negative_train_idx]
     negative_train_label = train_label[negative_train_idx]
     negative_train_idx = np.random.choice(np.arange(len(negative_train_label)), size=positive_train_idx.sum(), replace=False)
+    if more_negative:
+        negative_pressure_change = np.abs(negative_train_data[:, 1:, ...] - negative_train_data[:, :-1, ...]).mean(axis=(1,2,3))
+        more_negative_indices_pool = np.setdiff1d(np.where(negative_pressure_change >= 0.001), negative_train_idx)
+        more_negative_train_idx = np.random.choice(more_negative_indices_pool, size=min(len(more_negative_indices_pool), positive_train_idx.sum()))
+        negative_train_idx = np.hstack([negative_train_idx, more_negative_train_idx])
     negative_train_data = negative_train_data[negative_train_idx]
     negative_train_label = negative_train_label[negative_train_idx]
     train_data = np.vstack((positive_train_data, negative_train_data))
@@ -380,42 +299,7 @@ def make_tal_labels(data, timestamps, positive_csv, filter_timestamp=None, clip_
     calibrate_value: potential timestamp mismatch between mat and EMG data, the value represents how many seconds does the mat advance the EMG data
     prune_negative: set to True if we want to only use the data segments that contains positive labels
     '''
-    import pandas as pd
-    mask = np.array([True] * len(timestamps))
-    # filter out unuseful part
-    if filter_timestamp:
-        filter_timestamp = pd.read_csv(filter_timestamp)
-        
-        # main loop variables, i for iteration through each frame, j for iteration through the positive regions
-        i, j = 0, 0
-    
-        # initialize the time stamps of the very first positive region
-        start_h, start_min, start_s, end_h, end_min, end_s = filter_timestamp.iloc[j]
-        start_ts, end_ts = start_h * 3600 + start_min * 60 + start_s, end_h * 3600 + end_min * 60 + end_s
-    
-        # calibrate the timestamp mismatch between mat and EMG data
-        start_ts -= calibrate_value
-        end_ts -= calibrate_value
-    
-        # loop over the data to filter out wake stages
-        while i < len(timestamps):
-            ts = converted_timestamp(timestamps[i])
-        
-            # label positive signals
-            if start_ts <= ts <= end_ts:
-                mask[i] = False
-            elif ts > end_ts:
-                j += 1
-                if j >= len(filter_timestamp):
-                    print(f'timestamps at break: {timestamps[i]}')
-                    break
-            start_h, start_min, start_s, end_h, end_min, end_s = filter_timestamp.iloc[j]
-            if start_h < 20:
-                start_h += 24
-                end_h += 24
-            start_ts, end_ts = start_h * 3600 + start_min * 60 + start_s, end_h * 3600 + end_min * 60 + end_s
-            
-            i += 1
+    mask = filter_timestamp_func(timestamps, filter_timestamp, calibrate_value)
         
     # abandon the last few frames
     data = data[mask]
@@ -424,7 +308,6 @@ def make_tal_labels(data, timestamps, positive_csv, filter_timestamp=None, clip_
     num_samples = len(timestamps) // clip_len
     num_frames = num_samples * clip_len
     data = data[:num_frames].reshape(-1, clip_len, H, W)
-    print(data.shape)
     timestamps = timestamps[:num_frames]
     labels = np.zeros(num_frames)
     
@@ -491,6 +374,72 @@ def make_tal_labels(data, timestamps, positive_csv, filter_timestamp=None, clip_
         print(train_data.shape, train_label.shape, train_roi_label.shape)
     return train_data, train_label, val_data, val_label, timestamps
 
+def filter_timestamp_func(timestamps, filter_timestamp, calibrate_value):
+    '''
+    Args:
+     - timestamps: all the timestamps
+     - filter_timestamp: the csv file saving the timestamps to be filtered out
+    '''
+    mask = np.array([True] * len(timestamps))
+    # filter out unuseful part
+    if filter_timestamp:
+        filter_timestamp = pd.read_csv(filter_timestamp)
+        
+        # main loop variables, i for iteration through each frame, j for iteration through the positive regions
+        i, j = 0, 0
+    
+        # initialize the time stamps of the very first positive region
+        start_h, start_min, start_s, end_h, end_min, end_s = filter_timestamp.iloc[j]
+        start_ts, end_ts = start_h * 3600 + start_min * 60 + start_s, end_h * 3600 + end_min * 60 + end_s
+    
+        # calibrate the timestamp mismatch between mat and EMG data
+        start_ts -= calibrate_value
+        end_ts -= calibrate_value
+    
+        # loop over the data to filter out wake stages
+        while i < len(timestamps):
+            ts = converted_timestamp(timestamps[i])
+        
+            # label positive signals
+            if start_ts <= ts <= end_ts:
+                mask[i] = False
+            elif ts > end_ts:
+                j += 1
+                if j >= len(filter_timestamp):
+                    print(f'timestamps at break: {timestamps[i]}')
+                    break
+            start_h, start_min, start_s, end_h, end_min, end_s = filter_timestamp.iloc[j]
+            if start_h < 20:
+                start_h += 24
+                end_h += 24
+            start_ts, end_ts = start_h * 3600 + start_min * 60 + start_s, end_h * 3600 + end_min * 60 + end_s
+            
+            i += 1
+    return mask
+
+def create_context_window_with_padding(arr, L):
+    '''
+    Function to make (N, H, W) array to (N, L, H, W) array, the first and last several frames are padded with the edge frames
+    Note: better to use odd number L
+    '''
+    assert len(arr.shape) < 4, f"Invalid arr shape {arr.shape}"
+    while len(arr.shape) < 3:
+        arr = np.expand_dims(arr, axis=-1)
+    N, H, W = arr.shape
+    half_L = L // 2
+    
+    # Pad the array with duplicates of the first and last frames
+    padded_arr = np.pad(arr, ((half_L, half_L), (0, 0), (0, 0)), mode='edge')
+    
+    # Initialize the new array
+    context_window_array = np.zeros((N, L, H, W))
+    
+    # Fill the new array using a sliding window approach
+    for i in range(N):
+        context_window_array[i] = padded_arr[i:i+L]
+    
+    return np.squeeze(context_window_array)
+    
 def cosine_similarity(A, B):
     '''
     Arguments:

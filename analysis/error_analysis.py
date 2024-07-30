@@ -1,3 +1,5 @@
+# script to study the regional prediction quality for a window for original method
+
 from utils.models import *
 from utils.dataset import *
 from utils.inference import inference, plot_inference

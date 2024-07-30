@@ -16,22 +16,10 @@ def preprocess_data(data, labels, unravel=False, upperbound=255, z=3):
         data = data.reshape(N * C,  H, W)
     data[data > upperbound] = upperbound
     data /= upperbound
-#     flat_data = data.reshape(-1)
-#     mask = flat_data > 0
-#     mean = flat_data[mask].mean()
-#     std = flat_data[mask].std()
-#     lower_threshold = max(0, mean - 3 * std)
-#     upper_threshold = mean + 3 * std
-#     data[data < lower_threshold] = 0
-#     data[data > upper_threshold] = upper_threshold
-#     data = (np.array(data) * 255).astype(np.uint8)
-#     data = data[:len(data)//2]
-#     labels = labels[:len(labels)//2]
     return data, labels
 
 def preprocess_dataset(args):
     unravel = False
-#     unravel = 'conv' not in args.architecture
     train_data, train_label, cross_val_data, cross_val_label, internal_val_data, internal_val_label = prepare_datasets(args)
     train_data, train_label = preprocess_data(train_data, train_label, unravel=unravel)
     cross_val_data, cross_val_label = preprocess_data(cross_val_data, cross_val_label, unravel=unravel)
@@ -184,15 +172,63 @@ def prepare_datasets(args):
         internal_val_label = np.concatenate([np.load(os.path.join(path, args.clip_len_prefix + f'{data_type}_val_label.npy')) for path in data_paths[:split]], axis=0)
     else:
         raise NotImplementedError(f'{args.val_type} validation method not implemented!')
-    H1, H2, W1, W2 = args.input_size
-    train_data = train_data[:, :, H1:H2, W1:W2]
-    if cross_val_data is not None:
-        cross_val_data = cross_val_data[:, :, H1:H2, W1:W2]
-    if internal_val_data is not None:
-        internal_val_data = internal_val_data[:, :, H1:H2, W1:W2]
+    
+    train_data, train_label = process_data(args, train_data, train_label, 'train')
+    all_cross_val_data, all_cross_val_label = [], []
+    all_internal_val_data, all_internal_val_label = [], []
+    np.random.seed(args.seed)
+    for i in range(args.num_val_sets):
+        temp_cross_val_data, temp_cross_val_label = process_data(args, cross_val_data, cross_val_label, 'val')
+        temp_internal_val_data, temp_internal_val_label = process_data(args, internal_val_data, internal_val_label, 'val')
+        if temp_cross_val_data is not None:
+            all_cross_val_data.append(np.expand_dims(temp_cross_val_data, axis=0))
+            all_cross_val_label.append(np.expand_dims(temp_cross_val_label, axis=0))
+        if temp_internal_val_data is not None:
+            all_internal_val_data.append(np.expand_dims(temp_internal_val_data, axis=0))
+            all_internal_val_label.append(np.expand_dims(temp_internal_val_label, axis=0))
+    cross_val_data = np.concatenate(all_cross_val_data, axis=0) if all_cross_val_data else None
+    cross_val_label = np.concatenate(all_cross_val_label, axis=0) if all_cross_val_label else None
+    internal_val_data = np.concatenate(all_internal_val_data, axis=0) if all_internal_val_data else None
+    internal_val_label = np.concatenate(all_internal_val_label, axis=0) if all_internal_val_data else None
+
     if args.data_type == 'rgb_video':
+        # for single frame evaluation baseline
         center_frame = train_data.shape[1] // 2
         train_data = train_data[:, center_frame, ...]
-        cross_val_data = cross_val_data[:, center_frame, ...]
-        internal_val_data = internal_val_data[:, center_frame, ...]
+        cross_val_data = cross_val_data[:, center_frame, ...] if cross_val_data is not None else None
+        internal_val_data = internal_val_data[:, center_frame, ...] if internal_val_data is not None else None
     return train_data, train_label, cross_val_data, cross_val_label, internal_val_data, internal_val_label
+
+def process_data(args, data, label, mode):
+    # helper function to process different train/val dataset
+    assert mode in ['train', 'val']
+    if data is None:
+        return None, None
+    H1, H2, W1, W2 = args.input_size
+    if mode == 'train':
+        return data[:, :, H1:H2, W1:W2], label
+    else:
+        data = data[:, :, H1:H2, W1:W2]
+        n_chunks = 5
+        if args.downsample_val == 1:
+            # downsample the validation set due to it is too large
+            chunk_length = len(data) // n_chunks
+            if chunk_length <= 3000:
+                # validation set is small enough, no need to downsample
+                return data, label
+            downsampled_data, downsampled_label = [], []
+            start_indices = []
+            for i in range(n_chunks):
+                start_idx = np.random.randint(i * chunk_length, (i + 1) * chunk_length - 3000)
+                start_indices.append(start_idx)
+                downsampled_data.append(data[start_idx:start_idx + 3000, ...])
+                downsampled_label.append(label[start_idx:start_idx + 3000, ...])
+            print(start_indices)
+            return np.concatenate(downsampled_data, axis=0), np.concatenate(downsampled_label, axis=0)
+        else:
+            return data, label
+            
+    
+    
+    
+    

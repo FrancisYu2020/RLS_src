@@ -18,6 +18,7 @@ import wandb
 from train import *
 from utils.lossfunc import *
 from utils.scheduler import WarmupCosineScheduler
+from copy import deepcopy
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--lr", default=0.01, help="learning rate used to train the model", type=float)
@@ -30,18 +31,22 @@ parser.add_argument("--clip_len", default=16, help="window size of the input dat
 parser.add_argument("--input_size", default=[0, 16, 0, 16], nargs="+", help="window size of the input data", type=int)
 parser.add_argument("--val_type", default='cross+internal-val', choices=['cross-val', 'internal-val', 'cross+internal-val'], type=str, help="choose the method for validation, cross-val for validation on different patient, internal-val for validation on same patient different sleep stage, otherwise validation on both")
 # parser.add_argument("--task", default="classification", type=str, choices=["classification", "regression"], help="indicate what kind of task to be run (regression/classification, etc.)")
-parser.add_argument("--architecture", default="3d-resnet18", choices=["2d-efficientnet", "2d-positional", "2d-linear", "3d-conv", "2d-conv", "3d-resnet10", "3d-resnet18", "2d-resnet18", "2d-mlp", "2d-baseline"], help="architecture used")
+parser.add_argument("--architecture", default="3d-resnet18", choices=["2d-efficientnet", "2d-positional", "2d-linear", "3d-conv", "2d-conv", "3d-resnet10", "3d-resnet18", "2d-resnet18", "2d-mlp", "2d-baseline", "3d-pretrained-resnet"], help="architecture used")
 parser.add_argument("--exp_id", default=0, type=str, help="the id of the experiment")
 parser.add_argument("--debug_mode", default=0, type=int, help="0 for experiment mode, 1 for debug mode")
 parser.add_argument("--patients", default=[15], type=int, nargs="+", help="patient ids included in the training")
 parser.add_argument("--checkpoint_root", default='checkpoint', type=str, help="checkpoint root path")
 parser.add_argument("--seed", default=1, type=int, help="random seed for torch")
 parser.add_argument("--split", default=-1, type=float, help="split ratio of train and val")
-parser.add_argument("--data_type", default='tal', choices=['tal_pos', 'tal', 'context', 'rgb_video'], type=str, help="choose which kind of data to use")
+parser.add_argument("--data_type", default='tal', choices=['tal_pos', 'tal', 'context', 'context_more_negative', 'rgb_video'], type=str, help="choose which kind of data to use")
 parser.add_argument("--subset", default=1.0, type=float, help="training subset / training set")
-parser.add_argument("--val_freq", default=10, type=int, help="number of epochs between each validation")
+parser.add_argument("--val_freq", default=1, type=int, help="number of epochs between each validation")
 parser.add_argument("--num_workers", default=8, type=int, help="number of workers for pytorch dataloader")
+parser.add_argument("--downsample_val", default=1, type=int, help="1 for downsample the validation set")
+parser.add_argument("--phase", default='train', type=str, help="identify whether training or testing phase")
+parser.add_argument("--num_val_sets", default=1, type=int, help="number of validation set used")
 args = parser.parse_args()
+args.clip_len_prefix = 'win' + str(args.clip_len) + '_'
 
 def main_func(args):
     torch.manual_seed(args.seed)
@@ -83,9 +88,7 @@ def main_func(args):
     batch_size = args.batch_size
     learning_rate = args.lr
     
-    # load data
-    args.clip_len_prefix = 'win' + str(args.clip_len) + '_'
-    
+    # load data    
     train_data, train_label, cross_val_data, cross_val_label, internal_val_data, internal_val_label = preprocess_dataset(args)
     if args.subset < 1:
         train_indices = np.random.choice(np.arange(len(train_data)), int(args.subset * len(train_data)), replace=False)
@@ -95,10 +98,10 @@ def main_func(args):
     print("Training metadata:", train_data.shape, train_label.shape, int(train_label.sum()))
     print("Training statistics:", f'{train_data.mean()} ± {train_data.std()}')
     if cross_val_data is not None:
-        print("Cross patient validation metadata:", cross_val_label.shape, int(cross_val_label.sum()))
+        print("Cross patient validation metadata:", cross_val_label.shape, cross_val_label.sum(axis=-1).astype(int))
         print("Cross patient validation statistics:", f'{cross_val_data.mean()} ± {cross_val_data.std()}')
     if internal_val_data is not None:
-        print("Internal validation metadata:", internal_val_label.shape, int(internal_val_label.sum()))
+        print("Internal validation metadata:", internal_val_label.shape, internal_val_label.sum(axis=-1).astype(int))
         print("Internal validation statistics:", f'{internal_val_data.mean()} ± {internal_val_data.std()}')
     
     
@@ -110,11 +113,11 @@ def main_func(args):
     train_dataset = RLSDataset(args, train_data, train_label, transform=train_transform)
     train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, num_workers=args.num_workers, shuffle=True, pin_memory=True)
     if cross_val_data is not None:
-        cross_val_dataset = RLSDataset(args, cross_val_data, cross_val_label, transform=val_transform)
-        cross_val_loader = DataLoader(dataset=cross_val_dataset, num_workers=args.num_workers, batch_size=4 * batch_size, shuffle=False, pin_memory=True)
+        cross_val_datasets = [RLSDataset(args, cross_val_data[i], cross_val_label[i], transform=val_transform) for i in range(args.num_val_sets)]
+        cross_val_loaders = [DataLoader(dataset=cross_val_datasets[i], num_workers=args.num_workers, batch_size=args.batch_size, shuffle=False, pin_memory=True) for i in range(args.num_val_sets)]
     if internal_val_data is not None:
-        internal_val_dataset = RLSDataset(args, internal_val_data, internal_val_label, transform=val_transform)
-        internal_val_loader = DataLoader(dataset=internal_val_dataset, num_workers=args.num_workers, batch_size=4 * batch_size, shuffle=False, pin_memory=True)
+        internal_val_datasets = [RLSDataset(args, internal_val_data[i], internal_val_label[i], transform=val_transform) for i in range(args.num_val_sets)]
+        internal_val_loaders = [DataLoader(dataset=internal_val_datasets[i], num_workers=args.num_workers, batch_size=args.batch_size, shuffle=False, pin_memory=True) for i in range(args.num_val_sets)]
     
     # Initialize the model
     model = get_model(args)
@@ -136,19 +139,20 @@ def main_func(args):
     # Cosine annealing scheduler with warmup
     args.warmup_epochs = max(10, args.epochs // 100)
     args.cosine_epochs = max(20, int(args.epochs * 0.8))
-#     args.warmup_epochs = 1
-#     args.cosine_epochs = 3
     scheduler = WarmupCosineScheduler(args, optimizer)
     
-    args.best_f1 = {'cross':-np.inf, 'internal':-np.inf}
-    args.best_fprec = {'cross':-np.inf, 'internal':-np.inf}
-    args.best_miou = {'cross':-np.inf, 'internal':-np.inf}
-    args.best_loss = {'cross':np.inf, 'internal':np.inf}
+    infs = [np.inf] * args.num_val_sets
+    neg_infs = [-np.inf] * args.num_val_sets
+    args.best_f1 = {'cross':deepcopy(neg_infs), 'internal':deepcopy(neg_infs)}
+    args.best_fprec = {'cross':deepcopy(neg_infs), 'internal':deepcopy(neg_infs)}
+    args.best_miou = {'cross':deepcopy(neg_infs), 'internal':deepcopy(neg_infs)}
+    args.best_loss = {'cross':deepcopy(infs), 'internal':deepcopy(infs)}
     
-    args.best_f1_epoch = {'cross':None, 'internal':None}
-    args.best_fprec_epoch = {'cross':None, 'internal':None}
-    args.best_miou_epoch = {'cross':None, 'internal':None}
-    args.best_loss_epoch = {'cross':None, 'internal':None}
+    nones = [-1] * args.num_val_sets
+    args.best_f1_epoch = {'cross':nones, 'internal':nones}
+    args.best_fprec_epoch = {'cross':nones, 'internal':nones}
+    args.best_miou_epoch = {'cross':nones, 'internal':nones}
+    args.best_loss_epoch = {'cross':nones, 'internal':nones}
     
     print('start training loop')        
     # main train val loop
@@ -161,12 +165,13 @@ def main_func(args):
         
         if (epoch + 1) % args.val_freq == 0:
             # val one epoch and get val logs
-            if cross_val_data is not None:
-                precision, recall, f1, fprec, val_loss, miou = val(args, model, optimizer, cross_val_loader, cls_criterion, 'cross')
-                log_data.update({"val/cross_loss": val_loss, "val/cross_f1": f1, "val/cross_f0.5":fprec, "val/cross_precision":precision, "val/cross_recall":recall, "val/cross_miou": miou})
-            if internal_val_data is not None:
-                precision, recall, f1, fprec, val_loss, miou = val(args, model, optimizer, internal_val_loader, cls_criterion, 'internal')
-                log_data.update({"val/internal_loss": val_loss, "val/internal_f1": f1, "val/internal_f0.5":fprec, "val/internal_precision":precision, "val/internal_recall":recall, "val/internal_miou": miou})
+            for i in range(args.num_val_sets):
+                if cross_val_data is not None:
+                    precision, recall, f1, fprec, val_loss, miou = val(args, model, optimizer, cross_val_loaders[i], cls_criterion, 'cross', i)
+                    log_data.update({f"val{i}/cross_loss": val_loss, f"val{i}/cross_f1": f1, f"val{i}/cross_f0.5":fprec, f"val{i}/cross_precision":precision, f"val{i}/cross_recall":recall, f"val{i}/cross_miou": miou})
+                if internal_val_data is not None:
+                    precision, recall, f1, fprec, val_loss, miou = val(args, model, optimizer, internal_val_loaders[i], cls_criterion, 'internal', i)
+                    log_data.update({f"val{i}/internal_loss": val_loss, f"val{i}/internal_f1": f1, f"val{i}/internal_f0.5":fprec, f"val{i}/internal_precision":precision, f"val{i}/internal_recall":recall, f"val{i}/internal_miou": miou})
         
         if not args.debug_mode:
             wandb.log(log_data)

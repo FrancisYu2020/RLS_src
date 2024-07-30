@@ -57,41 +57,45 @@ def train(args, model, train_loader, cls_criterion, optimizer, scheduler=None):
     train_loss /= len(y_pred)
     return train_loss, train_f1, train_fprec, train_miou
 
-def val(args, model, optimizer, val_loader, cls_criterion, val_type, epsilon=1e-8):
+def val(args, model, optimizer, val_loader, cls_criterion, val_type, val_set_idx, epsilon=1e-8):
     '''
     args: input arguments from main function
     model: model to be evaluated 
     train_loader: training data dataloader
     epsilon: the laplace smoothing factor used to prevent division by 0
     cls_criterion: classification loss criterion
-    regression_criterion: regression loss criterion
+    val_type: cross or internal (inter/intra patient validation)
+    val_set_idx: the index of the validation set currently used
     '''
     model.eval()
     
     running_loss, y_pred, y_true = val_loop(args, model, val_loader, cls_criterion)
     
+    precision, recall, f1, fprec, miou = compute_metrics(y_pred, y_true, epsilon)
+    
+    def save_checkpoint_template(metric, best_metric, best_metric_epoch, metric_name):
+        if metric > best_metric[val_type][val_set_idx]:
+            best_metric[val_type][val_set_idx] = metric
+            best_metric_epoch[val_type][val_set_idx] = args.epoch + 1
+            if not args.debug_mode:
+                torch.save({'state_dict':model.state_dict(), 'optimizer':optimizer.state_dict(), 'precision':precision, 'recall':recall, 'f1':f1, 'cls_loss':running_loss}, os.path.join(args.checkpoint_dir, f'{val_type}_best_{metric_name}-{val_set_idx}.ckpt'))
+            tqdm.write(f'Best {val_type}_{metric_name}-{val_set_idx} model saved!')
+            
+    save_checkpoint_template(f1, args.best_f1, args.best_f1_epoch, f'f1')
+    save_checkpoint_template(fprec, args.best_fprec, args.best_fprec_epoch, f'f0.5')
+    save_checkpoint_template(miou, args.best_miou, args.best_miou_epoch, f'miou')
+    tqdm.write(f'Epoch [{args.epoch+1}/{args.epochs}] val set {val_set_idx}, CLS Loss: {running_loss}, F1: {f1 * 100:.2f}%, F0.5: {fprec * 100:.2f}%, precision: {precision * 100:.2f}%, recall: {recall * 100:.2f}%, miou: {miou * 100:.2f}%')
+    return precision, recall, f1, fprec, running_loss, miou
+
+def compute_metrics(y_pred, y_true, epsilon=1e-8):
     precision = precision_score(y_true, y_pred, zero_division=0)
     recall = recall_score(y_true, y_pred, zero_division=0)
     f1 = fbeta_score(y_true, y_pred, beta=1)
     fprec = fbeta_score(y_true, y_pred, beta=0.5)
     miou = np.logical_and(y_true, y_pred).sum() / (np.logical_or(y_true, y_pred).sum() + epsilon)
-    
-    def save_checkpoint_template(metric, best_metric, best_metric_epoch, metric_name):
-        if metric > best_metric[val_type]:
-            best_metric[val_type] = metric
-            best_metric_epoch[val_type] = args.epoch + 1
-            if not args.debug_mode:
-                torch.save({'state_dict':model.state_dict(), 'optimizer':optimizer.state_dict(), 'precision':precision, 'recall':recall, 'f1':f1, 'cls_loss':running_loss}, os.path.join(args.checkpoint_dir, f'{val_type}_best_{metric_name}.ckpt'))
-            tqdm.write(f'Best {val_type}_{metric_name} model saved!')
-            
-    save_checkpoint_template(f1, args.best_f1, args.best_f1_epoch, 'f1')
-    save_checkpoint_template(fprec, args.best_fprec, args.best_fprec_epoch, 'f0.5')
-    save_checkpoint_template(miou, args.best_miou, args.best_miou_epoch, 'miou')
-    tqdm.write(f'Epoch [{args.epoch+1}/{args.epochs}], CLS Loss: {running_loss}, F1: {f1 * 100:.2f}%, F0.5: {fprec * 100:.2f}%, precision: {precision * 100:.2f}%, recall: {recall * 100:.2f}%, miou: {miou * 100:.2f}%')
-    return precision, recall, f1, fprec, running_loss, miou
+    return precision, recall, f1, fprec, miou
 
-
-def val_loop(args, model, val_loader, cls_criterion):
+def val_loop(args, model, val_loader, cls_criterion=None):
     '''
     One single epoch of evaluation given the validation set
     

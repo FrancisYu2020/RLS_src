@@ -2,8 +2,9 @@ import torch.nn as nn
 import torch
 import torchvision.models as models
 import os
-from utils.resnet3d import *
 import timm
+from utils.resnet3d import generate_model
+import utils.pretrained_kinetics_model
 
 # 10: is just a placeholder for class inheritence
 resnet_2d_models = {10: models.resnet18, 18: models.resnet18, 34: models.resnet34}
@@ -15,7 +16,7 @@ def get_model(args):
     architecture_name = args.architecture
     clip_len = args.clip_len
     print(architecture_name)
-    if args.data_type == 'context':
+    if 'context' in args.data_type:
         num_classes = 1
     else:
         num_classes = clip_len
@@ -24,7 +25,7 @@ def get_model(args):
     elif architecture_name == '2d-baseline':
         return RLS2DBaseline(args, num_classes=1)
     elif architecture_name == "2d-conv":
-        return RLSConv2D(args, clip_len=clip_len, num_classes=num_classes)
+        return RLSConv2D(args, clip_len=clip_len, num_classes=num_classes, image_channel=3)
     elif architecture_name == '3d-conv':
         return RLSConv3D(args, clip_len=clip_len, num_classes=num_classes)
     elif architecture_name == '2d-linear':
@@ -35,6 +36,34 @@ def get_model(args):
         return EfficientNet(args, "efficientnet_b0.ra_in1k", num_classes)
     elif architecture_name == '2d-mlp':
         return MLP(clip_len, args.input_size, num_classes)
+    elif '3d-resnet' in architecture_name:
+        return RLS3DResNet(int(architecture_name[-2:]), num_classes)
+    elif architecture_name == '3d-pretrained-resnet':
+        args.model = 'resnet'
+        args.model_depth = 18
+        args.n_classes = 1039
+        args.n_input_channels = 3
+        args.resnet_shortcut = 'B'
+        args.conv1_t_size = 7
+        args.conv1_t_stride = 1
+        args.no_max_pool = True
+        args.resnet_widen_factor = 1.0
+        model = utils.pretrained_kinetics_model.generate_model(args)
+        model = utils.pretrained_kinetics_model.load_pretrained_model(model, 'pretrained_checkpoint/r3d18_KM_200ep.pth', 'resnet', 1)
+        return model
+    elif architecture_name == '3d-pretrained-resnet-scratch':
+        args.model = 'resnet'
+        args.model_depth = 18
+        args.n_classes = 1039
+        args.n_input_channels = 3
+        args.resnet_shortcut = 'B'
+        args.conv1_t_size = 7
+        args.conv1_t_stride = 1
+        args.no_max_pool = True
+        args.resnet_widen_factor = 1.0
+        model = utils.pretrained_kinetics_model.generate_model(args)
+        model.fc = nn.Linear(model.fc.in_features, num_classes)
+        return model
     else:
         raise NotImplementedError("ViT model part not implemented!")
 
@@ -49,6 +78,15 @@ def load_model(args, ckpt_name):
     model.load_state_dict(torch.load(checkpoint_path)['state_dict'])
     return model
 
+class RLS3DResNet(nn.Module):
+    def __init__(self, depth, num_classes):
+        super().__init__()
+        self.resnet = generate_model(depth)
+        self.resnet.fc = nn.Linear(self.resnet.fc.in_features, num_classes)
+    
+    def forward(self, x):
+        return self.resnet(x)
+    
 class RLS2DResNet18(nn.Module):
     def __init__(self, args, num_classes):
         super().__init__()
@@ -200,20 +238,6 @@ class MLP(nn.Module):
     def forward(self, x):
         return self.mlp(x.flatten(start_dim=1))
 
-# class MLP(nn.Module):
-#     def __init__(self, in_features, out_features, hidden_features=256):
-#         super().__init__()
-#         self.in_features = in_features
-#         self.out_features = out_features
-#         self.mlp = nn.Sequential(
-#             nn.Linear(in_features, hidden_features),
-#             nn.ReLU(),
-#             nn.Linear(hidden_features, out_features)
-#         )
-    
-#     def forward(self, x):
-#         return self.mlp(x)
-
 class PositionalEncoding(nn.Module):
     # modified from https://pytorch.org/tutorials/beginner/transformer_tutorial.html
     def __init__(self, max_len: int, d_model: int, dropout: float = 0.1):
@@ -265,41 +289,37 @@ class PositionalMLP(nn.Module):
         
 # try simple cnn 2d
 class RLSConv2D(nn.Module):
-    def __init__(self, args, clip_len=16, initial_temperature=1.0, num_classes=1):
+    def __init__(self, args, clip_len=16, initial_temperature=1.0, num_classes=1, image_channel=1):
         super().__init__()
-        self.clip_len = clip_len
+        self.clip_len = clip_len * image_channel
         self.conv = nn.Sequential(
-            nn.Conv2d(clip_len, 2 * clip_len, 3, 1, 1),
-            nn.BatchNorm2d(2 * clip_len),
+            nn.Conv2d(self.clip_len, 2 * self.clip_len, 3, 1, 1),
+            nn.BatchNorm2d(2 * self.clip_len),
             nn.ReLU(),
-#             nn.Conv2d(2 * clip_len, 4 * clip_len, 3, 1, 1),
-#             nn.BatchNorm2d(4 * clip_len),
-#             nn.ReLU(),
+            nn.Conv2d(2 * self.clip_len, 4 * self.clip_len, 3, 1, 1),
+            nn.BatchNorm2d(4 * self.clip_len),
+            nn.ReLU(),
             nn.AvgPool2d(2)
         )
-#         self.conv = nn.Sequential(
-#             nn.Conv2d(3, 16, 3, 1, 1),
-#             nn.BatchNorm2d(16),
-#             nn.ReLU(),
-#             nn.MaxPool2d(2),
-#             nn.Conv2d(16, 32, 3, 1, 1)
-#         )
-        self.temperature = nn.Parameter(torch.ones(1) * initial_temperature)
         H1, H2, W1, W2 = args.input_size
         H = H2 - H1
         W = W2 - W1
+        self.architecture = args.architecture
+        self.temperature = nn.Parameter(torch.ones(1) * initial_temperature)
         self.input_size = (H, W)
         self.conv_out = self._get_conv_out_size()
         self.classification_head = nn.Linear(self.conv_out, num_classes)
         self._init_modules()
     
     def _conv_forward(self, x):
+        if len(x.shape) == 5 and self.architecture == '2d-conv':
+            B, C, L, H, W = x.shape
+            x = x.reshape(B, C * L, H, W)
         x = self.conv(x)
         return x
         
     def _get_conv_out_size(self):
         x = torch.randn(1, self.clip_len, *self.input_size)
-#         x = torch.randn(1, 3, *self.input_size)
         return self._conv_forward(x).view(-1).size(0)
     
     def _init_modules(self):
@@ -314,15 +334,17 @@ class RLSConv2D(nn.Module):
     def forward(self, x):
         x = self._conv_forward(x).flatten(start_dim=1)
         return self.classification_head(x)
-#         return self.classification_head(x) / self.temperature
 
 # try simple cnn 3d
 class RLSConv3D(RLSConv2D):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.conv = nn.Sequential(
-            nn.Conv3d(3, 16, 3, 1, 1),
+            nn.Conv3d(3, 16, 3, 2, 1),
             nn.BatchNorm3d(16),
+            nn.ReLU(),
+            nn.Conv3d(16, 32, 3, 1, 1),
+            nn.BatchNorm3d(32),
             nn.ReLU(),
             nn.AvgPool3d(2),
         )
